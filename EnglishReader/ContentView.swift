@@ -82,8 +82,8 @@ struct LibraryView: View {
             }
             .overlay(alignment: .bottom) { if let importingName { importProgress(importingName) } }
         }
-        .fileImporter(isPresented: $choosingFile, allowedContentTypes: [UTType(filenameExtension: "epub") ?? .data, .plainText]) { result in
-            if case .success(let url) = result { startImport(url) }
+        .sheet(isPresented: $choosingFile) {
+            DocumentPicker { startImport($0) }.ignoresSafeArea()
         }
         .alert("没有导入成功", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("好", role: .cancel) {}
@@ -203,7 +203,10 @@ struct LibraryView: View {
     private func startImport(_ url: URL) {
         importingName = url.deletingPathExtension().lastPathComponent
         importTask = Task {
-            defer { importTask = nil; importingName = nil }
+            defer {
+                importTask = nil; importingName = nil
+                try? FileManager.default.removeItem(at: url)
+            }
             do {
                 let id = try await store.importBook(url: url)
                 lastReadBookID = id.uuidString
@@ -245,5 +248,32 @@ struct BookCover: View {
             .background(Color.cover, in: RoundedRectangle(cornerRadius: 5))
         }
         .accessibilityHidden(true)
+    }
+}
+
+/// Picks in copy mode: the system hands over a private copy instead of a security-scoped URL.
+/// Open-in-place needs a sandbox extension issued to the app's identity, which fails when
+/// a re-signed app's bundle ID doesn't match its application-identifier entitlement.
+struct DocumentPicker: UIViewControllerRepresentable {
+    var onPick: (URL) -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [UTType(filenameExtension: "epub") ?? .data, .plainText], asCopy: true)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+        init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            if let url = urls.first { onPick(url) }
+        }
     }
 }
