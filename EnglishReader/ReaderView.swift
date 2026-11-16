@@ -257,18 +257,25 @@ struct ReaderView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 0) {
-            if showPanel {
-                ReaderSettingsPanel(isNight: isNight,
-                                    onFonts: { sheet = .fonts },
-                                    onSpacing: { sheet = .spacing },
-                                    onMore: { sheet = .more },
-                                    onAutoRead: startAutoReading)
-                Divider()
-            } else if autoReading {
-                autoReadingBar
-            } else {
-                chapterBar
+            VStack(spacing: 0) {
+                if showPanel {
+                    // Slides up as one piece with the growing background; the bar it replaces just vanishes underneath.
+                    VStack(spacing: 0) {
+                        ReaderSettingsPanel(isNight: isNight,
+                                            onFonts: { sheet = .fonts },
+                                            onSpacing: { sheet = .spacing },
+                                            onMore: { sheet = .more },
+                                            onAutoRead: startAutoReading)
+                        Divider()
+                    }
+                    .transition(.move(edge: .bottom))
+                } else if autoReading {
+                    autoReadingBar.transition(.identity)
+                } else {
+                    chapterBar.transition(.identity)
+                }
             }
+            .clipped()
             HStack(spacing: 0) {
                 ReaderTabButton(title: "目录", systemImage: "list.bullet.rectangle.portrait") { sheet = .contents }
                     .accessibilityIdentifier("open-chapters")
@@ -277,7 +284,7 @@ struct ReaderView: View {
                 }
                 .accessibilityIdentifier("toggle-night")
                 ReaderTabButton(title: "设置", systemImage: showPanel ? "gearshape.fill" : "gearshape") {
-                    withAnimation(.easeInOut(duration: 0.2)) { showPanel.toggle() }
+                    withAnimation(.easeInOut(duration: 0.28)) { showPanel.toggle() }
                 }
                 .accessibilityAddTraits(showPanel ? .isSelected : [])
                 .accessibilityIdentifier("reading-settings")
