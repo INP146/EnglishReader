@@ -88,6 +88,8 @@ struct ReadingSurface: UIViewRepresentable {
         view.tintColor = .readerAccent
         view.textContainer.lineFragmentPadding = 0
         view.textContainerInset = UIEdgeInsets(top: 24, left: 26, bottom: 96, right: 26)
+        // Insets follow the window, not the bars, so showing/hiding chrome never moves the text.
+        view.contentInsetAdjustmentBehavior = .never
         view.dataDetectorTypes = []
         view.accessibilityIdentifier = "reading-text"
         view.accessibilityHint = "可用辅助功能操作选择单词、查词或收藏。"
@@ -113,8 +115,19 @@ struct ReadingSurface: UIViewRepresentable {
         override func layoutSubviews() {
             if laidOutWidth > 0, abs(bounds.width - laidOutWidth) > 0.5 { willChangeWidth?() }
             laidOutWidth = bounds.width
+            updateWindowInsets()
             super.layoutSubviews()
             didLayout?()
+        }
+
+        private func updateWindowInsets() {
+            guard let window else { return }
+            let insets = UIEdgeInsets(top: window.safeAreaInsets.top, left: 0, bottom: window.safeAreaInsets.bottom, right: 0)
+            guard insets != contentInset else { return }
+            let shift = insets.top - contentInset.top
+            contentInset = insets
+            verticalScrollIndicatorInsets = insets
+            contentOffset.y -= shift
         }
     }
 

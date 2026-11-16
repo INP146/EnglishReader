@@ -47,8 +47,12 @@ struct ReaderView: View {
     var body: some View {
         NavigationStack {
             readingArea
-            .safeAreaInset(edge: .bottom, spacing: 0) { bottomInset }
-            .overlay(alignment: lookup?.isInLowerHalf == true ? .top : .bottom) { lookupOverlay }
+            // Chrome floats over the text instead of resizing it; the lookup card stays clear of the bars.
+            .overlay {
+                Color.clear
+                    .safeAreaInset(edge: .bottom, spacing: 0) { bottomInset }
+                    .overlay(alignment: lookup?.isInLowerHalf == true ? .top : .bottom) { lookupOverlay }
+            }
             .overlay(alignment: .top) {
                 if let toast { ToastLabel(text: toast).padding(.top, 8) }
             }
@@ -108,7 +112,7 @@ struct ReaderView: View {
                     onLookup: { show($0) },
                     onSave: { save($0) })
                 .id(current.id)
-                .ignoresSafeArea(edges: chromeVisible ? [] : .vertical)
+                .ignoresSafeArea()
             } else if let loadError {
                 ContentUnavailableView("无法打开这本书", systemImage: "exclamationmark.triangle", description: Text(loadError))
             } else {
@@ -164,7 +168,7 @@ struct ReaderView: View {
                 .disabled(!hasNext).accessibilityLabel("下一章")
         }
         .padding(.horizontal, 8)
-        .background(Color.paper)
+        .background(Color.paper.ignoresSafeArea(edges: .bottom))
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
