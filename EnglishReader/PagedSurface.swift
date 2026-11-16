@@ -23,6 +23,8 @@ struct PagedSurface: UIViewControllerRepresentable {
     var jump: JumpRequest?
     /// Words still being learned; every occurrence gets a dotted underline.
     var learningForms: Set<String>
+    /// True while the lookup card is up; the looked-up word stays highlighted until it closes.
+    var lookingUp: Bool
     /// False while the toolbars are up: taps only dismiss them, and words can't be looked up or selected.
     var interactive: Bool
     /// While the lookup card or toolbars are up, edge taps close them instead of turning.
@@ -185,6 +187,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     func update(_ value: PagedSurface) {
         let old = config
         config = value
+        if old.lookingUp && !value.lookingUp { flash.cancel() }
         if old.backdrop != value.backdrop || old.backdropVersion != value.backdropVersion {
             for page in layouts.flatMap(\.cache.values) { page.backdrop.backdrop = value.backdrop; page.backdrop.refresh() }
         }
@@ -487,7 +490,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
             }
             if let range = ReaderTextTools.wordRange(at: location, in: text, words: book.wordRanges),
                let selection = ReaderTextTools.selection(for: range, in: text) {
-                flash.show(range, in: book.storage)
+                flash.show(range, in: book.storage, hold: true)
                 config.onTapWord(selection)
                 return
             }
@@ -502,7 +505,10 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
 
     func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
         ReaderTextTools.editMenu(for: range, in: textView, suggestedActions: suggestedActions,
-                                 onLookup: { [weak self] in self?.config.onLookup($0) },
+                                 onLookup: { [weak self, weak textView] value in
+                                     if let textView { self?.flash.show(value.range, in: textView.textStorage, hold: true) }
+                                     self?.config.onLookup(value)
+                                 },
                                  onSave: { [weak self] in self?.config.onSave($0) })
     }
 

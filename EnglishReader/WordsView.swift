@@ -251,6 +251,7 @@ struct WordDetail: View {
                             store.setMastered(id: item.id, !item.mastered)
                         }
                         Button("删除", systemImage: "trash", role: .destructive) { confirmDelete = true }
+                            .tint(.red)
                     }
                 }
                 .navigationTitle("单词").navigationBarTitleDisplayMode(.inline)

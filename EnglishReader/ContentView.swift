@@ -174,6 +174,7 @@ struct LibraryView: View {
         .contextMenu {
             if book.canExport { exportButton(book) }
             Button("移除书籍", systemImage: "trash", role: .destructive) { removeID = book.id }
+                .tint(.red)
         }
         .accessibilityLabel(book.author.isEmpty ? book.title : "\(book.title)，\(book.author)")
         .accessibilityValue(book.isStarted ? "已读 \(book.percentRead)%" : "未开始")
@@ -198,6 +199,7 @@ struct LibraryView: View {
             Button(book.isStarted ? "继续阅读" : "开始阅读", systemImage: "book") { open(ReaderRoute(bookID: book.id)) }
             if book.canExport { exportButton(book) }
             Button("移除书籍", systemImage: "trash", role: .destructive) { removeID = book.id }
+                .tint(.red)
         } label: {
             Image(systemName: "ellipsis").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                 .frame(width: 32, height: 28).contentShape(Rectangle())

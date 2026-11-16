@@ -80,12 +80,12 @@ struct ReaderView: View {
     var body: some View {
         NavigationStack {
             readingArea
-            // Chrome floats over the text instead of resizing it; the lookup card stays clear of the bars.
+            // Chrome floats over the text instead of resizing it; the lookup card stays clear of the bottom bar.
             .overlay {
                 Color.clear
-                    .safeAreaInset(edge: .top, spacing: 0) { if chromeVisible { topBar } }
                     .safeAreaInset(edge: .bottom, spacing: 0) { bottomInset }
-                    .overlay(alignment: lookup?.isInLowerHalf == true ? .top : .bottom) { lookupOverlay }
+                    .overlay(alignment: .top) { topBar }
+                    .overlay(alignment: .top) { lookupOverlay }
                     .overlay(alignment: .top) {
                         if let toast { ToastLabel(text: toast).padding(.top, 8) }
                     }
@@ -162,6 +162,7 @@ struct ReaderView: View {
                 previousChapter: chapter(at: chapter - 1), nextChapter: chapter(at: chapter + 1),
                 layout: layout, palette: palette, backdrop: backdrop, backdropVersion: backdropVersion,
                 turn: pageTurn, initialOffset: offset, jump: jump, learningForms: learningForms,
+                lookingUp: lookup != nil,
                 interactive: !chromeVisible,
                 edgeTapsTurnPages: lookup == nil && !chromeVisible,
                 autoTurnInterval: autoRunning ? Double(34 - 3 * autoSpeed) : nil,
@@ -193,6 +194,7 @@ struct ReaderView: View {
                     onScroll: { lookup = nil },
                     onLookup: { show($0) },
                     onSave: { save($0) },
+                    lookingUp: lookup != nil,
                     interactive: !chromeVisible,
                     onReachEnd: { reachedChapterEnd() },
                     resources: resources,
@@ -217,7 +219,13 @@ struct ReaderView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .background(chrome.ignoresSafeArea(edges: .top))
-        .transition(.move(edge: .top).combined(with: .opacity))
+        // Always in place and only slid away: inserting it anew sometimes animated from a stale frame.
+        .visualEffect { [chromeVisible] content, proxy in
+            content.offset(y: chromeVisible ? 0 : -proxy.frame(in: .global).maxY)
+        }
+        .opacity(chromeVisible ? 1 : 0)
+        .allowsHitTesting(chromeVisible)
+        .accessibilityHidden(!chromeVisible)
     }
 
     private var bottomInset: some View {
@@ -236,12 +244,13 @@ struct ReaderView: View {
         if let lookup {
             LookupCard(selection: lookup, entry: WordDictionary.shared.lookup(lookup.text),
                        isSaved: store.favorite(matching: lookup.text) != nil,
+                       palette: palette,
                        onSave: { save(lookup) },
                        onMore: { systemTerm = SystemTerm(text: lookup.text) },
                        onClose: { self.lookup = nil })
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .transition(.move(edge: lookup.isInLowerHalf ? .top : .bottom).combined(with: .opacity))
+            .transition(.move(edge: .top).combined(with: .opacity))
             .id(lookup.id)
         }
     }
@@ -573,6 +582,8 @@ struct LookupCard: View {
     let selection: ReadingSelection
     let entry: DictionaryEntry?
     let isSaved: Bool
+    /// The card takes the reading theme's toolbar shade and ink, like the bars around the page.
+    var palette = ReaderPalette(day: ReaderTheme.defaultDay, night: ReaderTheme.defaultNight)
     var onSave: () -> Void
     var onMore: () -> Void
     var onClose: () -> Void
@@ -584,33 +595,36 @@ struct LookupCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(entry?.headword ?? selection.text)
-                    .font(.system(.title2, design: .serif).weight(.semibold))
-                    .lineLimit(2).minimumScaleFactor(0.7)
-                if let phonetic = entry?.phonetic, !phonetic.isEmpty {
-                    Text("/\(phonetic)/").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(entry?.headword ?? selection.text)
+                        .font(.system(.title2, design: .serif).weight(.semibold))
+                        .lineLimit(2).minimumScaleFactor(0.7)
+                    if let phonetic = entry?.phonetic, !phonetic.isEmpty {
+                        Text("/\(phonetic)/").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    Button(action: onClose) {
+                        Image(systemName: "xmark.circle.fill").font(.title3).symbolRenderingMode(.hierarchical).foregroundStyle(.secondary)
+                    }
+                    .accessibilityLabel("关闭释义")
                 }
-                Spacer(minLength: 0)
-                Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill").font(.title3).symbolRenderingMode(.hierarchical).foregroundStyle(.secondary)
+                if let inflected = entry?.inflectedFrom, inflected.lowercased() != entry?.headword.lowercased() {
+                    Text("\(inflected) 是 \(entry?.headword ?? "") 的变形").font(.caption).foregroundStyle(.secondary)
                 }
-                .accessibilityLabel("关闭释义")
-            }
-            if let inflected = entry?.inflectedFrom, inflected.lowercased() != entry?.headword.lowercased() {
-                Text("\(inflected) 是 \(entry?.headword ?? "") 的变形").font(.caption).foregroundStyle(.secondary)
-            }
-            if let entry {
-                ScrollView {
-                    Text(entry.definition).font(.callout).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                if let entry {
+                    ScrollView {
+                        Text(entry.definition).font(.callout).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                    }
+                    .frame(maxHeight: 132)
+                    .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(selection.text.contains(" ") ? "离线词典只收录单词。可以用系统词典查这个词组。"
+                         : isLikelyName ? "离线词典里没有这个词，它可能是人名或地名。" : "离线词典里没有这个词。")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
-                .frame(maxHeight: 132)
-                .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text(selection.text.contains(" ") ? "离线词典只收录单词。可以用系统词典查这个词组。"
-                     : isLikelyName ? "离线词典里没有这个词，它可能是人名或地名。" : "离线词典里没有这个词。")
-                    .font(.callout).foregroundStyle(.secondary)
             }
+            .foregroundStyle(Color(uiColor: palette.ink))
             HStack(spacing: 10) {
                 Button(action: onSave) {
                     Label(isSaved ? "已在生词本" : "加入生词本", systemImage: isSaved ? "bookmark.fill" : "bookmark")
@@ -627,7 +641,7 @@ struct LookupCard: View {
             .controlSize(.regular)
         }
         .padding(16)
-        .background(Color.card, in: RoundedRectangle(cornerRadius: 20))
+        .background(Color(uiColor: palette.chrome), in: RoundedRectangle(cornerRadius: 20))
         .shadow(color: .black.opacity(0.12), radius: 16, y: 4)
         .tint(.accent)
         .accessibilityIdentifier("lookup-card")

@@ -9,8 +9,10 @@ struct ReadingSelection: Identifiable, Equatable {
     var sentence: String
     var offset: Int
     var length: Int
-    /// Where the word sits on screen, so the lookup card can avoid covering it.
-    var isInLowerHalf: Bool
+}
+
+extension ReadingSelection {
+    var range: NSRange { NSRange(location: offset, length: length) }
 }
 
 struct JumpRequest: Equatable {
@@ -36,6 +38,8 @@ struct ReadingSurface: UIViewRepresentable {
     var onScroll: () -> Void
     var onLookup: (ReadingSelection) -> Void
     var onSave: (ReadingSelection) -> Void
+    /// True while the lookup card is up; the looked-up word stays highlighted until it closes.
+    var lookingUp = false
     /// False while the toolbars are up: taps only dismiss them, and words can't be looked up or selected.
     var interactive = true
     /// Auto reading reached the end of the chapter.
@@ -248,6 +252,7 @@ struct ReadingSurface: UIViewRepresentable {
         }
 
         func update(_ value: ReadingSurface, in view: ReaderTextView) {
+            if parent.lookingUp && !value.lookingUp { flash.cancel() }
             parent = value // Refresh callbacks even when the document is unchanged.
             let size = ReaderTypography.pointSize(value.layout.fontSize)
             let chapterChanged = renderedChapterID != value.chapter.id
@@ -420,7 +425,7 @@ struct ReadingSurface: UIViewRepresentable {
                 parent.onTapLink(target)
             } else if let range = ReaderTextTools.wordRange(at: location, in: view, words: wordRanges),
                       let selection = ReaderTextTools.selection(for: range, in: view) {
-                flash.show(range, in: view.textStorage)
+                flash.show(range, in: view.textStorage, hold: true)
                 parent.onTapWord(selection)
             } else {
                 parent.onTapBlank()
@@ -430,7 +435,10 @@ struct ReadingSurface: UIViewRepresentable {
         // Native long-press selection handles and Copy remain intact; the menu adds lookup and save.
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
             ReaderTextTools.editMenu(for: range, in: textView, suggestedActions: suggestedActions,
-                                     onLookup: { [weak self] in self?.parent.onLookup($0) },
+                                     onLookup: { [weak self, weak textView] value in
+                                         if let textView { self?.flash.show(value.range, in: textView.textStorage, hold: true) }
+                                         self?.parent.onLookup(value)
+                                     },
                                      onSave: { [weak self] in self?.parent.onSave($0) })
         }
 
@@ -541,13 +549,7 @@ enum ReaderTextTools {
             .replacingOccurrences(of: ChapterTextBuilder.lineSeparator, with: " ")
             .replacingOccurrences(of: ChapterTextBuilder.attachment, with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let glyphs = view.layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-        let rect = view.layoutManager.boundingRect(forGlyphRange: glyphs, in: view.textContainer)
-            .offsetBy(dx: view.textContainerInset.left, dy: view.textContainerInset.top)
-        let onScreen = view.convert(rect, to: nil)
-        let height = view.window?.bounds.height ?? view.bounds.height
-        return ReadingSelection(text: trimmed, sentence: sentence, offset: range.location, length: range.length,
-                                isInLowerHalf: onScreen.midY > height * 0.5)
+        return ReadingSelection(text: trimmed, sentence: sentence, offset: range.location, length: range.length)
     }
 
     static func editMenu(for range: NSRange, in view: UITextView, suggestedActions: [UIMenuElement],
@@ -603,19 +605,21 @@ struct TapFilter {
     }
 }
 
-/// Briefly highlights a tapped or jumped-to word.
+/// Highlights a looked-up word until the card closes, or a jumped-to word briefly.
 @MainActor
 final class WordFlash {
     private var range: NSRange?
     private weak var storage: NSTextStorage?
     private var task: Task<Void, Never>?
 
-    func show(_ range: NSRange, in storage: NSTextStorage) {
+    /// `hold` keeps the highlight until `cancel()`; otherwise it fades after a moment.
+    func show(_ range: NSRange, in storage: NSTextStorage, hold: Bool = false) {
         guard NSMaxRange(range) <= storage.length else { return }
         cancel()
         self.range = range
         self.storage = storage
         storage.addAttribute(.backgroundColor, value: UIColor.readerHighlight, range: range)
+        guard !hold else { return }
         task = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(1.6))
             guard !Task.isCancelled else { return }
