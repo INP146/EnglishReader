@@ -38,6 +38,10 @@ final class LibraryStore {
 
     private func contentURL(for id: UUID) -> URL { booksDirectory.appendingPathComponent("\(id.uuidString).json") }
 
+    private func coverFileURL(for id: UUID) -> URL { booksDirectory.appendingPathComponent("\(id.uuidString)-cover.jpg") }
+
+    func coverURL(for book: ReaderBook) -> URL? { book.coverAspectRatio == nil ? nil : coverFileURL(for: book.id) }
+
     // MARK: Loading and recovery
 
     func retryLoading() {
@@ -112,17 +116,21 @@ final class LibraryStore {
             throw LibraryError.duplicate(existingID)
         }
         let destination = contentURL(for: imported.book.id)
+        let coverDestination = coverFileURL(for: imported.book.id)
         let content = imported.content
-        try await Task.detached(priority: .userInitiated) {
-            let data = try JSONEncoder().encode(content)
-            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: destination, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        }.value
+        let cover = imported.cover
         do {
+            try await Task.detached(priority: .userInitiated) {
+                let data = try JSONEncoder().encode(content)
+                try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try data.write(to: destination, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                try cover?.write(to: coverDestination, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            }.value
             try commit(books: [imported.book] + books, favorites: favorites,
                        fingerprints: fingerprints.merging([imported.fingerprint: imported.book.id]) { _, new in new })
         } catch {
             try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: coverDestination)
             throw error
         }
         contentCache = (imported.book.id, imported.content)
@@ -139,6 +147,7 @@ final class LibraryStore {
         perform {
             try commit(books: books.filter { $0.id != id }, favorites: favorites, fingerprints: fingerprints.filter { $0.value != id })
             try? FileManager.default.removeItem(at: contentURL(for: id))
+            try? FileManager.default.removeItem(at: coverFileURL(for: id))
             if contentCache?.id == id { contentCache = nil }
         }
     }

@@ -1,5 +1,7 @@
 import Foundation
 import CryptoKit
+import ImageIO
+import UniformTypeIdentifiers
 import ZIPFoundation
 #if canImport(FoundationXML)
 import FoundationXML
@@ -11,6 +13,8 @@ enum BookImporter {
     struct ImportedBook: Sendable {
         let book: ReaderBook
         let content: BookContent
+        /// A downscaled JPEG of the EPUB's own cover, when it has one.
+        let cover: Data?
         let fingerprint: String
     }
 
@@ -62,9 +66,11 @@ enum BookImporter {
         }
         let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let title = url.deletingPathExtension().lastPathComponent
-        var (book, content) = ext == "txt" ? try importText(data, title: title) : try importEPUB(data, fallbackTitle: title)
+        let (parsed, content, cover) = ext == "txt" ? try importText(data, title: title) : try importEPUB(data, fallbackTitle: title)
+        var book = parsed
         book.chapters = content.chapterInfo
-        return ImportedBook(book: book, content: content, fingerprint: hash)
+        book.coverAspectRatio = cover?.aspectRatio
+        return ImportedBook(book: book, content: content, cover: cover?.jpeg, fingerprint: hash)
     }
 
     static func decodeText(_ data: Data) -> String? {
@@ -76,7 +82,7 @@ enum BookImporter {
         return String(data: data, encoding: .windowsCP1252)
     }
 
-    private static func importText(_ data: Data, title: String) throws -> (ReaderBook, BookContent) {
+    private static func importText(_ data: Data, title: String) throws -> (ReaderBook, BookContent, Cover?) {
         guard data.count <= maximumTextBytes else { throw ImportError.tooLarge }
         guard var text = decodeText(data), !text.contains("\0") else {
             throw ImportError.corrupt("无法识别 TXT 的文字编码，请另存为 UTF-8 后再试。")
@@ -86,10 +92,10 @@ enum BookImporter {
         let chapters = try PlainTextLayout.chapters(from: text)
         guard !chapters.isEmpty else { throw ImportError.empty }
         let book = ReaderBook(title: title.isEmpty ? "Untitled" : title, author: "", chapters: [])
-        return (book, BookContent(chapters: chapters))
+        return (book, BookContent(chapters: chapters), nil)
     }
 
-    private static func importEPUB(_ data: Data, fallbackTitle: String) throws -> (ReaderBook, BookContent) {
+    private static func importEPUB(_ data: Data, fallbackTitle: String) throws -> (ReaderBook, BookContent, Cover?) {
         let archive: Archive
         do { archive = try Archive(data: data, accessMode: .read) }
         catch { throw ImportError.corrupt("文件不是有效的 EPUB（ZIP 压缩包损坏）。") }
@@ -225,7 +231,46 @@ enum BookImporter {
         let title = metadata.descendants("title").first.map { PlainTextLayout.cleanLabel($0.plainText) } ?? ""
         let authors = metadata.descendants("creator").map { PlainTextLayout.cleanLabel($0.plainText) }.filter { !$0.isEmpty }
         let book = ReaderBook(title: title.isEmpty ? fallbackTitle : title, author: authors.joined(separator: ", "), chapters: [])
-        return (book, BookContent(chapters: chapters))
+        // EPUB 3 marks the cover in the manifest; EPUB 2 names it in <meta name="cover">.
+        // A missing or undecodable cover never blocks the book.
+        let coverName = metadata.descendants("meta").first { $0.attributes["name"]?.lowercased() == "cover" }?.attributes["content"]
+        let coverItem = items.values.first { $0.properties.contains("cover-image") }
+            ?? coverName.flatMap { name in items[name] ?? (try? resolve(name, relativeTo: opfPath)).flatMap { path in items.values.first { $0.path == path } } }
+        var cover: Cover?
+        if let coverItem, coverItem.media.hasPrefix("image/"), !encryptedPaths.contains(coverItem.path),
+           let bytes = try? resource(coverItem.path, limit: 16 * 1_024 * 1_024) {
+            try Task.checkCancellation()
+            cover = Cover(bytes)
+        }
+        return (book, BookContent(chapters: chapters), cover)
+    }
+
+    struct Cover {
+        static let maximumPixelSize = 900
+        let jpeg: Data
+        /// Width over height, kept within ordinary book proportions.
+        let aspectRatio: Double
+
+        /// Decodes through a bounded thumbnail so a huge image never expands fully in memory.
+        init?(_ data: Data) {
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                  width > 0, height > 0, width * height <= 100_000_000 else { return nil }
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: Self.maximumPixelSize,
+            ]
+            guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+            let output = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(output, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+            CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
+            guard CGImageDestinationFinalize(destination) else { return nil }
+            jpeg = output as Data
+            aspectRatio = min(1, max(0.5, Double(image.width) / Double(image.height)))
+        }
     }
 
     /// Strict XHTML first; real-world tag soup falls back to the lenient scanner.

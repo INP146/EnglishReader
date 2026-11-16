@@ -39,6 +39,8 @@ struct ReaderBook: Codable, Identifiable, Equatable, Sendable {
     var chapters: [ChapterInfo]
     var position: ReadingPosition = ReadingPosition()
     var isSample: Bool = false
+    /// Width over height of the cover image saved beside the book's text; nil when the book has none.
+    var coverAspectRatio: Double?
 
     var progress: Double {
         guard !chapters.isEmpty else { return 0 }
@@ -47,6 +49,12 @@ struct ReaderBook: Codable, Identifiable, Equatable, Sendable {
         let before = chapters.prefix(chapter).reduce(0) { $0 + $1.length }
         return min(1, Double(before + position.offset) / Double(max(total, 1)))
     }
+
+    var isStarted: Bool { position.chapter > 0 || position.offset > 0 }
+    var isFinished: Bool { progress >= 0.995 }
+    var percentRead: Int { Int(progress * 100) }
+    /// Width over height for laying out the cover; generated covers use 2:3.
+    var coverAspect: Double { coverAspectRatio ?? 2 / 3 }
 }
 
 struct BookContent: Codable, Sendable {

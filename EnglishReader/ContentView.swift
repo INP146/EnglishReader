@@ -46,30 +46,25 @@ struct LibraryView: View {
     @State private var duplicateID: UUID?
     @State private var removeID: UUID?
 
-    private var featured: ReaderBook? {
-        store.books.first { $0.id.uuidString == lastReadBookID } ?? store.books.first
+    /// Started, unfinished books, the one read most recently first.
+    private var reading: [ReaderBook] {
+        let started = store.books.filter { $0.isStarted && !$0.isFinished }
+        return started.filter { $0.id.uuidString == lastReadBookID } + started.filter { $0.id.uuidString != lastReadBookID }
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    if let failure = store.readFailure { failureCard(failure) }
-                    if let featured {
-                        featuredCard(featured)
-                        let others = store.books.filter { $0.id != featured.id }
-                        if !others.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("书架上的其他书").font(.title3.bold()).padding(.bottom, 8)
-                                ForEach(others) { row($0) }
-                            }
-                        }
+                VStack(alignment: .leading, spacing: 32) {
+                    if let failure = store.readFailure { failureCard(failure).padding(.horizontal, 20) }
+                    if !reading.isEmpty { continueShelf }
+                    if !store.books.isEmpty {
+                        grid
                     } else if store.readFailure == nil {
                         emptyState
                     }
                 }
-                .padding(.horizontal, 20).padding(.vertical, 12)
-                .frame(maxWidth: 680).frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
             }
             .background(Color.paper)
             .navigationTitle("书架")
@@ -100,65 +95,91 @@ struct LibraryView: View {
 
     // MARK: Pieces
 
-    private func featuredCard(_ book: ReaderBook) -> some View {
-        let started = book.position.offset > 0 || book.position.chapter > 0
-        return VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 18) {
-                BookCover(book: book).frame(width: 84, height: 122)
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(book.title).font(.title3.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
-                    if !book.author.isEmpty { Text(book.author).font(.subheadline).foregroundStyle(.secondary) }
-                    Spacer(minLength: 4)
-                    if started {
-                        ProgressView(value: book.progress).tint(.accent)
-                        Text("已读 \(Int(book.progress * 100))% · \(book.chapters[min(book.position.chapter, book.chapters.count - 1)].title)")
-                            .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                    } else if book.isSample {
-                        Text("示例 · 前三章节选").font(.footnote).foregroundStyle(.secondary)
+    /// Like Apple Books' "Continue": large covers in a horizontal row, progress underneath.
+    private var continueShelf: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("继续阅读").font(.title2.bold()).padding(.horizontal, 20)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .bottom, spacing: 18) {
+                    ForEach(reading) { book in
+                        VStack(alignment: .leading, spacing: 8) {
+                            coverButton(book).frame(height: 210)
+                            ProgressView(value: book.progress).tint(.accent)
+                            HStack {
+                                Text("\(book.percentRead)%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                                Spacer(minLength: 0)
+                                bookMenu(book)
+                            }
+                        }
+                        .frame(width: 210 * book.coverAspect)
                     }
                 }
-                Spacer(minLength: 0)
-                bookMenu(book)
+                .scrollTargetLayout()
             }
-            Button { open(ReaderRoute(bookID: book.id)) } label: {
-                Text(started ? "继续阅读" : "开始阅读").font(.headline).frame(maxWidth: .infinity, minHeight: 34)
-            }
-            .buttonStyle(.borderedProminent)
-            .accessibilityIdentifier("continue-reading")
+            .contentMargins(.horizontal, 20, for: .scrollContent)
+            .scrollTargetBehavior(.viewAligned)
         }
-        .padding(18)
-        .background(Color.card, in: RoundedRectangle(cornerRadius: 20))
     }
 
-    private func row(_ book: ReaderBook) -> some View {
-        HStack(spacing: 14) {
-            Button { open(ReaderRoute(bookID: book.id)) } label: {
-                HStack(spacing: 14) {
-                    BookCover(book: book).frame(width: 46, height: 66)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(book.title).font(.headline).multilineTextAlignment(.leading).lineLimit(2)
-                        if !book.author.isEmpty { Text(book.author).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
-                        Text(book.progress > 0 ? "已读 \(Int(book.progress * 100))%" : book.isSample ? "示例节选" : "未开始")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
+    /// Like Apple Books' library: covers of their own proportions sitting on a common baseline.
+    private var grid: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("全部书籍").font(.title2.bold())
+                Spacer()
+                Text("\(store.books.count) 本").font(.subheadline).foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-            bookMenu(book)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 22, alignment: .bottom)],
+                      alignment: .leading, spacing: 26) {
+                ForEach(store.books) { book in
+                    VStack(alignment: .leading, spacing: 6) {
+                        coverButton(book)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                            .aspectRatio(2 / 3, contentMode: .fit)
+                        HStack {
+                            status(book)
+                            Spacer(minLength: 0)
+                            bookMenu(book)
+                        }
+                    }
+                    .accessibilityIdentifier("book-\(book.id.uuidString)")
+                }
+            }
         }
-        .padding(.vertical, 8)
+        .padding(.horizontal, 20)
+    }
+
+    private func coverButton(_ book: ReaderBook) -> some View {
+        Button { open(ReaderRoute(bookID: book.id)) } label: {
+            BookCover(book: book, url: store.coverURL(for: book))
+        }
+        .buttonStyle(.plain)
         .contextMenu { Button("移除书籍", systemImage: "trash", role: .destructive) { removeID = book.id } }
-        .accessibilityIdentifier("book-\(book.id.uuidString)")
+        .accessibilityLabel(book.author.isEmpty ? book.title : "\(book.title)，\(book.author)")
+        .accessibilityValue(book.isStarted ? "已读 \(book.percentRead)%" : "未开始")
+    }
+
+    @ViewBuilder
+    private func status(_ book: ReaderBook) -> some View {
+        if book.isFinished {
+            Text("已读完").font(.caption).foregroundStyle(.secondary)
+        } else if book.isStarted {
+            Text("\(book.percentRead)%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+        } else {
+            Text(book.isSample ? "示例" : "新")
+                .font(.caption2.weight(.semibold)).foregroundStyle(.white)
+                .padding(.horizontal, 7).padding(.vertical, 2)
+                .background(Color.accent, in: Capsule())
+        }
     }
 
     private func bookMenu(_ book: ReaderBook) -> some View {
         Menu {
+            Button(book.isStarted ? "继续阅读" : "开始阅读", systemImage: "book") { open(ReaderRoute(bookID: book.id)) }
             Button("移除书籍", systemImage: "trash", role: .destructive) { removeID = book.id }
         } label: {
-            Image(systemName: "ellipsis").font(.body.weight(.semibold)).foregroundStyle(.secondary)
-                .frame(width: 36, height: 36).contentShape(Rectangle())
+            Image(systemName: "ellipsis").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                .frame(width: 32, height: 28).contentShape(Rectangle())
         }
         .accessibilityLabel("更多操作")
     }
@@ -221,10 +242,31 @@ struct LibraryView: View {
     }
 }
 
+/// The EPUB's own cover when it has one, otherwise a generated title cover.
+/// Sizes itself to the book's proportions within whatever frame it is offered.
 struct BookCover: View {
     let book: ReaderBook
+    var url: URL?
+    @State private var image: UIImage?
 
     var body: some View {
+        Group {
+            if let image = image ?? url.flatMap(CoverImages.cached) {
+                // Overlaying a clear box keeps an out-of-range image cropped to the cover's frame.
+                Color.clear.overlay { Image(uiImage: image).resizable().scaledToFill() }
+            } else {
+                generated
+            }
+        }
+        .aspectRatio(book.coverAspect, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(.black.opacity(0.08), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+        .task(id: url) { if let url { image = await CoverImages.load(url) } }
+        .accessibilityHidden(true)
+    }
+
+    private var generated: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
             // Size the title so its longest word fits on one line instead of breaking mid-word.
@@ -245,9 +287,23 @@ struct BookCover: View {
             .foregroundStyle(Color(uiColor: .readerPaper).opacity(0.95))
             .environment(\.colorScheme, .light)
             .frame(width: width, height: proxy.size.height)
-            .background(Color.cover, in: RoundedRectangle(cornerRadius: 5))
+            .background(Color.cover)
         }
-        .accessibilityHidden(true)
+    }
+}
+
+/// Covers are small JPEGs written at import; decode them off the main thread once.
+@MainActor
+enum CoverImages {
+    private static let cache = NSCache<NSURL, UIImage>()
+
+    static func cached(_ url: URL) -> UIImage? { cache.object(forKey: url as NSURL) }
+
+    static func load(_ url: URL) async -> UIImage? {
+        if let hit = cached(url) { return hit }
+        let image = await Task.detached(priority: .utility) { UIImage(contentsOfFile: url.path)?.preparingForDisplay() }.value
+        if let image { cache.setObject(image, forKey: url as NSURL) }
+        return image
     }
 }
 
