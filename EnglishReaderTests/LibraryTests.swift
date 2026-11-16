@@ -449,6 +449,33 @@ struct ReadingSurfaceContractTests {
         #expect((heading?.pointSize ?? 0) > 20)
     }
 
+    @Test func readerLayoutKeepsTextAndAppliesSpacing() {
+        let chapter = ReaderChapter(id: "c", title: "T", text: "Title\nPlain italic text.",
+                                    styles: [TextStyleRun(location: 0, length: 5, style: .heading),
+                                             TextStyleRun(location: 12, length: 6, style: .italic)])
+        let layout = ReaderLayout(fontSize: 20, typeface: .georgia, lineSpacing: 1.8, paragraphSpacing: 1.2, margin: 30)
+        let rendered = ReadingSurface.attributedText(for: chapter, size: 20, layout: layout)
+        #expect(rendered.string == chapter.text)
+        let paragraph = rendered.attribute(.paragraphStyle, at: 8, effectiveRange: nil) as? NSParagraphStyle
+        #expect(paragraph?.lineHeightMultiple == 1.8)
+        #expect(paragraph?.paragraphSpacing == 24)
+        let italic = rendered.attribute(.font, at: 13, effectiveRange: nil) as? UIFont
+        #expect(italic?.fontDescriptor.symbolicTraits.contains(.traitItalic) == true)
+    }
+
+    @Test func bookSearchFindsMatchesAcrossChaptersInOrder() {
+        let chapters = [ReaderChapter(id: "a", title: "A", text: "Alice was beginning to get very tired.\nALICE again."),
+                        ReaderChapter(id: "b", title: "B", text: "No match here."),
+                        ReaderChapter(id: "c", title: "C", text: "Said 😀 alice.")]
+        let result = BookSearch.search("alice", in: chapters)
+        #expect(result.hits.map(\.chapter) == [0, 0, 2])
+        #expect(result.hits.map(\.offset) == [0, 39, 8])
+        #expect(!result.truncated)
+        #expect(String(result.hits[2].snippet.characters).contains("😀 alice"))
+        #expect(BookSearch.search("alice", in: chapters, limit: 2).truncated)
+        #expect(BookSearch.search("  ", in: chapters).hits.isEmpty)
+    }
+
     @Test func offsetsMapAcrossWhitespaceChanges() {
         let old = "One.\n\nTwo  words."
         let new = "One.\nTwo words."

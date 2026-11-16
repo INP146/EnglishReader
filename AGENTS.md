@@ -9,7 +9,9 @@ iOS 英文阅读器（SwiftUI，iOS 26，Xcode 26.3+）。离线 EPUB/TXT 导入
   - `BookImporter.swift` EPUB/TXT 导入（依赖 SPM 包 ZIPFoundation）
   - `ChapterText.swift` 统一的“纯文本 + 样式区间”章节构建；`HTMLEntities.swift` 实体表
   - `LibraryStore.swift` 书库持久化（`library.json` v2 + `books/<uuid>.json`，含 v1 迁移）
-  - `ReaderView.swift` / `ReadingSurface.swift` 阅读页；`WordsView.swift` 生词本与复习
+  - `ReaderView.swift` 阅读页与底部工具栏；`ReadingSurface.swift` 上下滚动正文；`PagedSurface.swift` 分页正文（仿真/覆盖/平移/无动画）
+  - `ReaderPanels.swift` 设置面板、字体/间距/更多设置、书内搜索；`ReaderStyle.swift` 排版、配色主题、背景纹理
+  - `WordsView.swift` 生词本与复习
   - `WordDictionary.swift` 读取 `Resources/dictionary.sqlite`
   - `Theme.swift` 颜色（自动适配深色）
 - `EnglishReaderTests/` 单元测试（`Fixtures/alice.epub` 为真实 Gutenberg EPUB）

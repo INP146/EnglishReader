@@ -9,9 +9,22 @@ struct ReaderView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var systemScheme
     @AppStorage("lastReadBookID") private var lastReadBookID = ""
     @AppStorage("readerFont") private var fontSize = ReaderTypography.defaultSize
+    @AppStorage("readerTypeface") private var typeface = ReaderTypeface.newYork
+    @AppStorage("readerLineSpacing") private var lineSpacing = ReaderLayout.defaultLineSpacing
+    @AppStorage("readerParagraphSpacing") private var paragraphSpacing = ReaderLayout.defaultParagraphSpacing
+    @AppStorage("readerMargin") private var margin = ReaderLayout.defaultMargin
     @AppStorage("readerAppearance") private var appearance = "system"
+    @AppStorage("readerDayTheme") private var dayTheme = ReaderTheme.defaultDay
+    @AppStorage("readerNightTheme") private var nightTheme = ReaderTheme.defaultNight
+    @AppStorage("readerBackdrop") private var backdrop = ReaderBackdrop.plain
+    @AppStorage("readerBackdropVersion") private var backdropVersion = 0
+    @AppStorage("readerPageTurn") private var pageTurn = PageTurn.scroll
+    @AppStorage("readerEyeCare") private var eyeCare = false
+    @AppStorage("readerAutoSpeed") private var autoSpeed = 3
+    @AppStorage("readerKeepAwake") private var keepAwake = false
     @AppStorage("readerTipSeen") private var tipSeen = false
 
     @State private var content: BookContent?
@@ -22,13 +35,20 @@ struct ReaderView: View {
     @State private var jump: JumpRequest?
     @State private var lookup: ReadingSelection?
     @State private var chromeVisible = true
-    @State private var showContents = false
-    @State private var showSettings = false
+    @State private var showPanel = false
+    @State private var sliderChapter: Double?
+    @State private var autoReading = false
+    @State private var sheet: ReaderSheet?
     @State private var systemTerm: SystemTerm?
     @State private var toast: String?
-    /// Set while visiting a saved word's source; the reader's own place is kept here.
+    /// Set while visiting a saved word's source or a search result; the reader's own place is kept here.
     @State private var savedPlace: ReadingPosition?
     @State private var marks: [NSRange] = []
+
+    private enum ReaderSheet: String, Identifiable {
+        case contents, search, fonts, spacing, more
+        var id: String { rawValue }
+    }
 
     private var book: ReaderBook? { store.books.first { $0.id == bookID } }
     private var current: ReaderChapter? {
@@ -38,6 +58,14 @@ struct ReaderView: View {
     private var chapterCount: Int { content?.chapters.count ?? book?.chapters.count ?? 0 }
     private var hasNext: Bool { chapter + 1 < chapterCount }
     private var colorScheme: ColorScheme? { appearance == "light" ? .light : appearance == "dark" ? .dark : nil }
+    private var isNight: Bool { appearance == "dark" || (appearance != "light" && systemScheme == .dark) }
+    private var palette: ReaderPalette { ReaderPalette(day: dayTheme, night: nightTheme) }
+    private var chrome: Color { Color(uiColor: palette.chrome) }
+    private var layout: ReaderLayout {
+        ReaderLayout(fontSize: fontSize, typeface: typeface, lineSpacing: lineSpacing, paragraphSpacing: paragraphSpacing, margin: margin)
+    }
+    /// Auto reading pauses while the toolbars or the lookup card are up.
+    private var autoRunning: Bool { autoReading && !chromeVisible && lookup == nil && sheet == nil }
 
     /// Surface forms of words still being learned; every occurrence gets underlined.
     private var learningForms: Set<String> {
@@ -60,21 +88,25 @@ struct ReaderView: View {
             .animation(.spring(duration: 0.25), value: lookup?.id)
             .navigationTitle(current?.title ?? book?.title ?? "")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Color.paper, for: .navigationBar)
+            .toolbarBackground(chrome, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar(chromeVisible ? .visible : .hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { close() } label: { Label("书架", systemImage: "chevron.left") }
                         .accessibilityIdentifier("close-reader")
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showSettings = true } label: { Label("阅读设置", systemImage: "textformat.size") }
-                        .accessibilityIdentifier("reading-settings")
-                }
             }
             .statusBarHidden(!chromeVisible)
         }
         .tint(.accent)
+        .overlay {
+            if eyeCare {
+                // A warm multiply wash cuts blue light over the page and the toolbars alike.
+                Color(red: 1, green: 0.72, blue: 0.38).opacity(0.22).blendMode(.multiply)
+                    .ignoresSafeArea().allowsHitTesting(false)
+            }
+        }
         .preferredColorScheme(colorScheme)
         .task { await open() }
         .task(id: toast) {
@@ -84,9 +116,24 @@ struct ReaderView: View {
         }
         .onChange(of: learningForms, initial: true) { updateMarks() }
         .onChange(of: current?.id) { updateMarks() }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { store.persist() } }
-        .sheet(isPresented: $showContents) { contents }
-        .sheet(isPresented: $showSettings) { ReaderSettings(fontSize: $fontSize, appearance: $appearance) }
+        .onChange(of: pageTurn) { jump = nil } // A rebuilt surface must not replay an old jump.
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { store.persist(); ScreenBrightness.restore() } else { ScreenBrightness.reapply() }
+        }
+        .onChange(of: keepAwake || autoReading, initial: true) { _, awake in UIApplication.shared.isIdleTimerDisabled = awake }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+            ScreenBrightness.reset()
+        }
+        .sheet(item: $sheet) { item in
+            switch item {
+            case .contents: contents
+            case .search: BookSearchView(chapters: content?.chapters ?? []) { visit(chapter: $0, offset: $1) }
+            case .fonts: ReaderFontPicker()
+            case .spacing: ReaderSpacingSettings()
+            case .more: ReaderMoreSettings()
+            }
+        }
         .sheet(item: $systemTerm) { SystemDictionary(term: $0.text).ignoresSafeArea() }
         .alert("没有保存成功", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("好", role: .cancel) { store.errorMessage = nil }
@@ -97,26 +144,49 @@ struct ReaderView: View {
 
     private var readingArea: some View {
         ZStack {
-            Color.paper.ignoresSafeArea()
+            Color(uiColor: palette.paper).ignoresSafeArea()
             if let current {
-                ReadingSurface(
-                    chapter: current, fontSize: fontSize, initialOffset: offset, jump: jump, markedRanges: marks,
-                    onPosition: { value, fraction in
-                        offset = value
-                        self.fraction = fraction
-                        if savedPlace == nil { store.savePosition(bookID: bookID, chapter: chapter, offset: value) }
-                    },
-                    onTapWord: { show($0) },
-                    onTapBlank: { tappedBlank() },
-                    onScroll: { lookup = nil },
-                    onLookup: { show($0) },
-                    onSave: { save($0) })
-                .id(current.id)
-                .ignoresSafeArea()
+                surface(for: current)
+                    .id("\(current.id)|\(pageTurn.rawValue)")
+                    .ignoresSafeArea()
             } else if let loadError {
                 ContentUnavailableView("无法打开这本书", systemImage: "exclamationmark.triangle", description: Text(loadError))
             } else {
                 ProgressView("正在打开…")
+            }
+        }
+    }
+
+    @ViewBuilder private func surface(for current: ReaderChapter) -> some View {
+        if pageTurn.isPaged {
+            PagedSurface(
+                chapter: current, layout: layout, palette: palette, backdrop: backdrop, backdropVersion: backdropVersion,
+                turn: pageTurn, initialOffset: offset, jump: jump, markedRanges: marks,
+                hasPrevious: chapter > 0, hasNext: hasNext,
+                edgeTapsTurnPages: lookup == nil && !chromeVisible,
+                autoTurnInterval: autoRunning ? Double(34 - 3 * autoSpeed) : nil,
+                onPosition: positionChanged,
+                onTapWord: { show($0) },
+                onTapBlank: { tappedBlank() },
+                onTurn: { lookup = nil },
+                onLookup: { show($0) },
+                onSave: { save($0) },
+                onBoundary: { forward in
+                    if forward { reachedChapterEnd() } else { go(to: chapter - 1, atEnd: true) }
+                })
+        } else {
+            ZStack {
+                BackdropRepresentable(backdrop: backdrop, palette: palette, version: backdropVersion)
+                ReadingSurface(
+                    chapter: current, layout: layout, palette: palette, initialOffset: offset, jump: jump, markedRanges: marks,
+                    autoScrollSpeed: autoRunning ? Double(8 + 8 * autoSpeed) : nil,
+                    onPosition: positionChanged,
+                    onTapWord: { show($0) },
+                    onTapBlank: { tappedBlank() },
+                    onScroll: { lookup = nil },
+                    onLookup: { show($0) },
+                    onSave: { save($0) },
+                    onReachEnd: { reachedChapterEnd() })
             }
         }
     }
@@ -127,7 +197,7 @@ struct ReaderView: View {
             if savedPlace != nil { returnBar }
             if chromeVisible {
                 bottomBar
-            } else if fraction >= 0.99 && hasNext {
+            } else if fraction >= 0.99 && hasNext && !pageTurn.isPaged && !autoReading {
                 nextChapterButton.padding(.bottom, 8)
             }
         }
@@ -148,28 +218,94 @@ struct ReaderView: View {
     }
 
     private var bottomBar: some View {
-        HStack(spacing: 4) {
-            Button { showContents = true } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }
-                .accessibilityLabel("目录").accessibilityIdentifier("open-chapters")
-            Button { go(to: chapter - 1) } label: { Image(systemName: "chevron.backward").frame(width: 44, height: 44) }
-                .disabled(chapter == 0).accessibilityLabel("上一章")
-            if fraction >= 0.99 && hasNext {
-                nextChapterButton.frame(maxWidth: .infinity)
+        VStack(spacing: 0) {
+            if showPanel {
+                ReaderSettingsPanel(isNight: isNight,
+                                    onFonts: { sheet = .fonts },
+                                    onSpacing: { sheet = .spacing },
+                                    onMore: { sheet = .more },
+                                    onAutoRead: startAutoReading)
+                Divider()
+            } else if autoReading {
+                autoReadingBar
             } else {
-                VStack(spacing: 2) {
-                    Text(current?.title ?? "").lineLimit(1)
-                    Text("第 \(chapter + 1)/\(max(chapterCount, 1)) 章 · 本章 \(Int(fraction * 100))%")
-                        .monospacedDigit().font(.caption2)
-                }
-                .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
-                .accessibilityElement(children: .combine)
+                chapterBar
             }
-            Button { go(to: chapter + 1) } label: { Image(systemName: "chevron.forward").frame(width: 44, height: 44) }
-                .disabled(!hasNext).accessibilityLabel("下一章")
+            HStack(spacing: 0) {
+                ReaderTabButton(title: "目录", systemImage: "list.bullet.rectangle.portrait") { sheet = .contents }
+                    .accessibilityIdentifier("open-chapters")
+                ReaderTabButton(title: isNight ? "日间" : "夜间", systemImage: isNight ? "sun.max" : "moon") {
+                    appearance = isNight ? "light" : "dark"
+                }
+                .accessibilityIdentifier("toggle-night")
+                ReaderTabButton(title: "设置", systemImage: showPanel ? "gearshape.fill" : "gearshape") {
+                    withAnimation(.easeInOut(duration: 0.2)) { showPanel.toggle() }
+                }
+                .accessibilityAddTraits(showPanel ? .isSelected : [])
+                .accessibilityIdentifier("reading-settings")
+                ReaderTabButton(title: "搜索", systemImage: "magnifyingglass") { sheet = .search }
+                    .accessibilityIdentifier("search-book")
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
         }
-        .padding(.horizontal, 8)
-        .background(Color.paper.ignoresSafeArea(edges: .bottom))
+        .background(chrome.ignoresSafeArea(edges: .bottom))
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private var chapterBar: some View {
+        let last = max(chapterCount - 1, 0)
+        let shown = min(Int(sliderChapter ?? Double(chapter)), last)
+        return VStack(spacing: 6) {
+            Group {
+                if sliderChapter != nil, let chapters = content?.chapters, chapters.indices.contains(shown) {
+                    Text("\(chapters[shown].title) · \(shown + 1)/\(chapterCount)")
+                } else {
+                    Text("第 \(chapter + 1)/\(max(chapterCount, 1)) 章 · 本章 \(Int(fraction * 100))%")
+                }
+            }
+            .font(.caption2).monospacedDigit().foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 14) {
+                Button("上一章") { go(to: chapter - 1) }
+                    .disabled(chapter == 0)
+                Slider(value: Binding(get: { sliderChapter ?? Double(chapter) }, set: { sliderChapter = $0.rounded() }),
+                       in: 0...Double(max(last, 1)), step: 1) { editing in
+                    if !editing, let target = sliderChapter {
+                        sliderChapter = nil
+                        go(to: Int(target))
+                    }
+                }
+                .disabled(last == 0)
+                .accessibilityLabel("章节")
+                .accessibilityValue("第 \(shown + 1) 章，共 \(chapterCount) 章")
+                Button("下一章") { go(to: chapter + 1) }
+                    .disabled(!hasNext)
+                    .accessibilityIdentifier("next-chapter-bar")
+            }
+            .font(.subheadline)
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+    }
+
+    private var autoReadingBar: some View {
+        HStack(spacing: 14) {
+            Label("自动阅读", systemImage: "play.circle").font(.subheadline.weight(.medium))
+            Spacer()
+            Button { autoSpeed = max(1, autoSpeed - 1) } label: { Image(systemName: "minus").frame(width: 36, height: 32) }
+                .disabled(autoSpeed <= 1).accessibilityLabel("减速")
+            Text("速度 \(autoSpeed)").monospacedDigit().font(.subheadline)
+            Button { autoSpeed = min(10, autoSpeed + 1) } label: { Image(systemName: "plus").frame(width: 36, height: 32) }
+                .disabled(autoSpeed >= 10).accessibilityLabel("加速")
+            Button("退出") { autoReading = false }
+                .buttonStyle(.bordered).controlSize(.small)
+                .accessibilityIdentifier("stop-auto-read")
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
     }
 
     private var nextChapterButton: some View {
@@ -211,7 +347,7 @@ struct ReaderView: View {
         NavigationStack {
             ScrollViewReader { proxy in
                 List(Array((content?.chapters ?? []).enumerated()), id: \.element.id) { index, item in
-                    Button { go(to: index); showContents = false } label: {
+                    Button { go(to: index); sheet = nil } label: {
                         HStack {
                             Text(item.title).foregroundStyle(index == chapter ? Color.accent : .primary)
                             Spacer()
@@ -224,7 +360,7 @@ struct ReaderView: View {
                 .onAppear { proxy.scrollTo(chapter, anchor: .center) }
             }
             .navigationTitle("目录").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { showContents = false } } }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { sheet = nil } } }
         }
         .presentationDetents([.medium, .large])
     }
@@ -252,14 +388,49 @@ struct ReaderView: View {
         }
     }
 
-    private func go(to index: Int) {
+    private func positionChanged(_ value: Int, _ fraction: Double) {
+        offset = value
+        self.fraction = fraction
+        if savedPlace == nil { store.savePosition(bookID: bookID, chapter: chapter, offset: value) }
+    }
+
+    /// `atEnd` opens the chapter at its last page, for turning back across a chapter boundary.
+    private func go(to index: Int, atEnd: Bool = false) {
         guard index >= 0, index < chapterCount, index != chapter else { return }
         lookup = nil
         chapter = index
-        offset = 0
-        fraction = 0
+        offset = atEnd ? max(0, (current?.text.utf16.count ?? 1) - 1) : 0
+        fraction = atEnd ? 1 : 0
         jump = nil
-        if savedPlace == nil { store.savePosition(bookID: bookID, chapter: index, offset: 0) }
+        if savedPlace == nil { store.savePosition(bookID: bookID, chapter: index, offset: offset) }
+    }
+
+    /// Opens a search result, keeping the reader's own place to come back to.
+    private func visit(chapter index: Int, offset value: Int) {
+        guard content?.chapters.indices.contains(index) == true else { return }
+        if savedPlace == nil { savedPlace = ReadingPosition(chapter: chapter, offset: offset) }
+        lookup = nil
+        chapter = index
+        offset = value
+        jump = JumpRequest(offset: value, highlight: true)
+    }
+
+    private func reachedChapterEnd() {
+        if hasNext {
+            go(to: chapter + 1)
+        } else if autoReading {
+            autoReading = false
+            toast = "已经读到最后了"
+        }
+    }
+
+    private func startAutoReading() {
+        lookup = nil
+        autoReading = true
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showPanel = false
+            chromeVisible = false
+        }
     }
 
     private func returnToSavedPlace() {
@@ -279,7 +450,10 @@ struct ReaderView: View {
         if lookup != nil {
             lookup = nil
         } else {
-            withAnimation(.easeInOut(duration: 0.2)) { chromeVisible.toggle() }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                chromeVisible.toggle()
+                showPanel = false
+            }
         }
     }
 
@@ -396,45 +570,6 @@ struct LookupCard: View {
         .shadow(color: .black.opacity(0.12), radius: 16, y: 4)
         .tint(.accent)
         .accessibilityIdentifier("lookup-card")
-    }
-}
-
-struct ReaderSettings: View {
-    @Binding var fontSize: Double
-    @Binding var appearance: String
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("字号") {
-                    Stepper(value: $fontSize, in: ReaderTypography.sizeRange, step: 1) {
-                        Text("\(Int(fontSize))").monospacedDigit()
-                    }
-                    Text("The pleasure of reading begins with a single page.")
-                        .font(Font(ReaderTypography.serif(ReaderTypography.pointSize(fontSize)) as CTFont))
-                        .lineSpacing(6)
-                        .padding(.vertical, 4)
-                }
-                Section("外观") {
-                    Picker("外观", selection: $appearance) {
-                        Text("跟随系统").tag("system")
-                        Text("浅色").tag("light")
-                        Text("深色").tag("dark")
-                    }
-                    .pickerStyle(.segmented)
-                }
-                Section {
-                    Text("书籍、阅读位置和生词都只保存在这台设备上，不会上传。删除应用会一并删除。")
-                    Text("释义来自内置的离线英汉词典 ECDICT（MIT 许可）。示例书节选自 Project Gutenberg 的公版《爱丽丝梦游仙境》。")
-                } header: { Text("关于") }
-                    .font(.footnote).foregroundStyle(.secondary)
-                Section { MadeWithAirBuild() }
-            }
-            .navigationTitle("阅读设置").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
-        }
-        .presentationDetents([.medium, .large])
     }
 }
 
