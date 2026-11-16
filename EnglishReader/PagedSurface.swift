@@ -228,7 +228,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     private var safeInsets: UIEdgeInsets { view.window?.safeAreaInsets ?? view.safeAreaInsets }
 
     /// Blank space under the footer labels.
-    private var footerBottomSpace: CGFloat { (max(safeInsets.bottom, 12) + 4) * 0.75 }
+    private var footerBottomSpace: CGFloat { max(safeInsets.bottom, 12) + 4 }
 
     /// Text keeps at least one line of 20 pt body text clear above the footer.
     private var footerGap: CGFloat {

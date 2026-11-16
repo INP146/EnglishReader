@@ -35,6 +35,7 @@ struct ReaderView: View {
     @State private var jump: JumpRequest?
     @State private var lookup: ReadingSelection?
     @State private var chromeVisible = true
+    @State private var bottomSafeArea: CGFloat = 0
     @State private var showPanel = false
     @State private var sliderChapter: Double?
     @State private var autoReading = false
@@ -84,6 +85,7 @@ struct ReaderView: View {
             .overlay {
                 Color.clear
                     .safeAreaInset(edge: .bottom, spacing: 0) { bottomInset }
+                    .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { bottomSafeArea = $0 }
                     .overlay(alignment: .top) { topBar }
                     .overlay(alignment: .top) { lookupOverlay }
                     .overlay(alignment: .top) {
@@ -257,9 +259,15 @@ struct ReaderView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 0) {
+            // The panel unfolds from the tabs' top edge, sliding over the chapter bar, which stays put underneath.
+            ZStack(alignment: .bottom) {
+                Group {
+                    if autoReading { autoReadingBar } else { chapterBar }
+                }
+                .background(chrome)
+                .allowsHitTesting(!showPanel)
+                .accessibilityHidden(showPanel)
                 if showPanel {
-                    // Slides up as one piece with the growing background; the bar it replaces just vanishes underneath.
                     VStack(spacing: 0) {
                         ReaderSettingsPanel(isNight: isNight,
                                             onFonts: { sheet = .fonts },
@@ -268,11 +276,10 @@ struct ReaderView: View {
                                             onAutoRead: startAutoReading)
                         Divider()
                     }
+                    .background(chrome)
                     .transition(.move(edge: .bottom))
-                } else if autoReading {
-                    autoReadingBar.transition(.identity)
-                } else {
-                    chapterBar.transition(.identity)
+                    // A view being removed from a ZStack loses its implicit order; pin it above the chapter bar.
+                    .zIndex(1)
                 }
             }
             .clipped()
@@ -293,8 +300,10 @@ struct ReaderView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
+            // Sinks a quarter of the blank under the tabs into the home indicator area.
+            .padding(.bottom, -(bottomSafeArea + 6) / 4)
+            .background(chrome.ignoresSafeArea(edges: .bottom))
         }
-        .background(chrome.ignoresSafeArea(edges: .bottom))
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
