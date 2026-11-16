@@ -60,6 +60,7 @@ struct ReaderView: View {
         return content.chapters[index]
     }
     private var chapterCount: Int { content?.chapters.count ?? book?.chapters.count ?? 0 }
+    private var resources: URL? { book.flatMap { store.resourcesURL(for: $0) } }
     private var hasNext: Bool { chapter + 1 < chapterCount }
     private var colorScheme: ColorScheme? { appearance == "light" ? .light : appearance == "dark" ? .dark : nil }
     private var isNight: Bool { appearance == "dark" || (appearance != "light" && systemScheme == .dark) }
@@ -177,7 +178,9 @@ struct ReaderView: View {
                 },
                 onBoundary: { forward in
                     if forward { reachedChapterEnd() }
-                })
+                },
+                resources: resources,
+                onTapLink: { openLink($0) })
         } else {
             ZStack {
                 BackdropRepresentable(backdrop: backdrop, palette: palette, version: backdropVersion)
@@ -191,7 +194,9 @@ struct ReaderView: View {
                     onLookup: { show($0) },
                     onSave: { save($0) },
                     interactive: !chromeVisible,
-                    onReachEnd: { reachedChapterEnd() })
+                    onReachEnd: { reachedChapterEnd() },
+                    resources: resources,
+                    onTapLink: { openLink($0) })
             }
         }
     }
@@ -447,6 +452,22 @@ struct ReaderView: View {
         chapter = index
         offset = value
         jump = JumpRequest(offset: value, highlight: true)
+    }
+
+    /// A tapped link: web addresses open in the browser, places in the book are visited like a search result,
+    /// so "回到我读到的地方" brings the reader back from a footnote.
+    private func openLink(_ target: String) {
+        lookup = nil
+        if let url = URL(string: target), let scheme = url.scheme?.lowercased(), ["http", "https", "mailto"].contains(scheme) {
+            UIApplication.shared.open(url)
+            return
+        }
+        let parts = target.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        guard let place = content?.location(ofPath: parts[0], fragment: parts.count > 1 ? parts[1] : nil) else {
+            toast = "这个链接指向的内容不在书里"
+            return
+        }
+        visit(chapter: place.chapter, offset: place.offset)
     }
 
     private func reachedChapterEnd() {

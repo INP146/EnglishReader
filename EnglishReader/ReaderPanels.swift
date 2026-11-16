@@ -410,6 +410,7 @@ enum BookSearch {
         let upper = upperIndex < NSMaxRange(match) ? NSMaxRange(match) : NSMaxRange(text.rangeOfComposedCharacterSequence(at: upperIndex))
         func clean(_ string: String) -> String {
             string.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: ChapterTextBuilder.lineSeparator, with: " ")
+                .replacingOccurrences(of: ChapterTextBuilder.attachment, with: " ")
         }
         var result = AttributedString(lower > 0 ? "…" : "")
         result += AttributedString(clean(text.substring(with: NSRange(location: lower, length: match.location - lower))))

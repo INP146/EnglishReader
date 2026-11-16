@@ -76,7 +76,7 @@ enum SampleBook {
             let html = excerpt.1.components(separatedBy: "\n\n")
                 .map { "<p>\($0.replacingOccurrences(of: "\n", with: "<br>"))</p>" }
                 .joined()
-            let text = (try? LenientHTML.extract(html)) ?? (text: excerpt.1, styles: [])
+            let text = (try? LenientHTML.extract(html)) ?? (text: excerpt.1, styles: [], anchors: [:])
             return ReaderChapter(id: "alice-excerpt-\(index + 1)", title: excerpt.0, text: text.text, styles: text.styles)
         })
     }

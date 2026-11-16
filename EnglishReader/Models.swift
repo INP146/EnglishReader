@@ -8,21 +8,55 @@ struct ReadingPosition: Codable, Equatable, Sendable {
 
 /// A styled span of chapter text, in UTF-16 offsets.
 struct TextStyleRun: Codable, Equatable, Sendable {
-    enum Style: String, Codable, Sendable { case italic, bold, heading }
+    enum Style: String, Codable, Sendable {
+        // Inline.
+        case italic, bold, sup, sub, code, strike
+        /// A link; `value` is a web address or "path/inside/book.xhtml#id".
+        case link
+        /// One attachment character (U+FFFC); `value` names the stored image file and `alt` is its description.
+        case image
+        // Paragraph-level: the style applies to every paragraph the run touches.
+        /// `value` is the level, "1" to "6"; absent for headings found in plain text.
+        case heading
+        case quote, list, center
+    }
     var location: Int
     var length: Int
     var style: Style
+    var value: String?
+    var alt: String?
     var range: NSRange { NSRange(location: location, length: length) }
 }
 
 /// Chapter text is the single source of truth for rendering and for every
 /// stored offset. Paragraphs end with "\n"; line breaks inside a paragraph
-/// (verse, <br>) use U+2028 so they don't pick up paragraph spacing.
+/// (verse, <br>) use U+2028 so they don't pick up paragraph spacing; an image
+/// is one U+FFFC character.
 struct ReaderChapter: Codable, Identifiable, Equatable, Sendable {
     var id: String
     var title: String
     var text: String
     var styles: [TextStyleRun] = []
+    /// The package path of the document this text came from. A long document is split
+    /// into several chapters that share it; text imports have none.
+    var source: String?
+    /// Element ids and the offsets they point at, so links can jump inside the book.
+    var anchors: [String: Int] = [:]
+
+    private enum CodingKeys: String, CodingKey { case id, title, text, styles, source, anchors }
+}
+
+extension ReaderChapter {
+    /// Chapters saved before links and images existed have no `source` or `anchors`.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        text = try container.decode(String.self, forKey: .text)
+        styles = try container.decodeIfPresent([TextStyleRun].self, forKey: .styles) ?? []
+        source = try container.decodeIfPresent(String.self, forKey: .source)
+        anchors = try container.decodeIfPresent([String: Int].self, forKey: .anchors) ?? [:]
+    }
 }
 
 struct ChapterInfo: Codable, Equatable, Sendable {
@@ -41,6 +75,8 @@ struct ReaderBook: Codable, Identifiable, Equatable, Sendable {
     var isSample: Bool = false
     /// Width over height of the cover image saved beside the book's text; nil when the book has none.
     var coverAspectRatio: Double?
+    /// True when the book was imported with everything needed to export it whole (see `BookPackage`).
+    var hasPackage: Bool?
 
     var progress: Double {
         guard !chapters.isEmpty else { return 0 }
@@ -50,6 +86,7 @@ struct ReaderBook: Codable, Identifiable, Equatable, Sendable {
         return min(1, Double(before + position.offset) / Double(max(total, 1)))
     }
 
+    var canExport: Bool { hasPackage == true }
     var isStarted: Bool { position.chapter > 0 || position.offset > 0 }
     var isFinished: Bool { progress >= 0.995 }
     var percentRead: Int { Int(progress * 100) }
@@ -59,6 +96,16 @@ struct ReaderBook: Codable, Identifiable, Equatable, Sendable {
 
 struct BookContent: Codable, Sendable {
     var chapters: [ReaderChapter]
+
+    /// Where a link into the book lands: the chapter that holds the fragment, else the start of the document.
+    func location(ofPath path: String, fragment: String?) -> (chapter: Int, offset: Int)? {
+        var first: Int?
+        for (index, chapter) in chapters.enumerated() where chapter.source == path {
+            first = first ?? index
+            if let fragment, let offset = chapter.anchors[fragment] { return (index, offset) }
+        }
+        return first.map { ($0, 0) }
+    }
 
     var chapterInfo: [ChapterInfo] {
         chapters.map { ChapterInfo(title: $0.title, length: $0.text.utf16.count) }

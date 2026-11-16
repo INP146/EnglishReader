@@ -43,8 +43,12 @@ struct LibraryView: View {
     @State private var importTask: Task<Void, Never>?
     @State private var importingName: String?
     @State private var importError: String?
+    @State private var exportError: String?
     @State private var duplicateID: UUID?
     @State private var removeID: UUID?
+    @State private var exportTask: Task<Void, Never>?
+    @State private var exportingName: String?
+    @State private var exported: ExportedFile?
 
     /// Started, unfinished books, the one read most recently first.
     private var reading: [ReaderBook] {
@@ -75,14 +79,27 @@ struct LibraryView: View {
                         .accessibilityIdentifier("import-book")
                 }
             }
-            .overlay(alignment: .bottom) { if let importingName { importProgress(importingName) } }
+            .overlay(alignment: .bottom) {
+                if let importingName {
+                    progress("正在导入《\(importingName)》") { importTask?.cancel() }
+                } else if let exportingName {
+                    progress("正在导出《\(exportingName)》") { exportTask?.cancel() }
+                }
+            }
         }
         .sheet(isPresented: $choosingFile) {
             DocumentPicker { startImport($0) }.ignoresSafeArea()
         }
+        .sheet(item: $exported, onDismiss: { exported = nil }) { file in
+            ShareSheet(url: file.url).ignoresSafeArea().presentationDetents([.medium, .large])
+                .onDisappear { try? FileManager.default.removeItem(at: file.url.deletingLastPathComponent()) }
+        }
         .alert("没有导入成功", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("好", role: .cancel) {}
         } message: { Text(importError ?? "") }
+        .alert("没有导出成功", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
+            Button("好", role: .cancel) {}
+        } message: { Text(exportError ?? "") }
         .alert("这本书已在书架上", isPresented: Binding(get: { duplicateID != nil }, set: { if !$0 { duplicateID = nil } })) {
             Button("打开") { if let duplicateID { open(ReaderRoute(bookID: duplicateID)) } }
             Button("取消", role: .cancel) {}
@@ -154,7 +171,10 @@ struct LibraryView: View {
             BookCover(book: book, url: store.coverURL(for: book))
         }
         .buttonStyle(.plain)
-        .contextMenu { Button("移除书籍", systemImage: "trash", role: .destructive) { removeID = book.id } }
+        .contextMenu {
+            if book.canExport { exportButton(book) }
+            Button("移除书籍", systemImage: "trash", role: .destructive) { removeID = book.id }
+        }
         .accessibilityLabel(book.author.isEmpty ? book.title : "\(book.title)，\(book.author)")
         .accessibilityValue(book.isStarted ? "已读 \(book.percentRead)%" : "未开始")
     }
@@ -176,12 +196,18 @@ struct LibraryView: View {
     private func bookMenu(_ book: ReaderBook) -> some View {
         Menu {
             Button(book.isStarted ? "继续阅读" : "开始阅读", systemImage: "book") { open(ReaderRoute(bookID: book.id)) }
+            if book.canExport { exportButton(book) }
             Button("移除书籍", systemImage: "trash", role: .destructive) { removeID = book.id }
         } label: {
             Image(systemName: "ellipsis").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                 .frame(width: 32, height: 28).contentShape(Rectangle())
         }
         .accessibilityLabel("更多操作")
+    }
+
+    private func exportButton(_ book: ReaderBook) -> some View {
+        Button("导出书籍", systemImage: "square.and.arrow.up") { startExport(book) }
+            .disabled(exportTask != nil)
     }
 
     private var emptyState: some View {
@@ -209,11 +235,11 @@ struct LibraryView: View {
         .background(Color.card, in: RoundedRectangle(cornerRadius: 20))
     }
 
-    private func importProgress(_ name: String) -> some View {
+    private func progress(_ message: String, cancel: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
             ProgressView()
-            Text("正在导入《\(name)》").lineLimit(1)
-            Button("取消") { importTask?.cancel() }
+            Text(message).lineLimit(1)
+            Button("取消", action: cancel)
         }
         .font(.subheadline)
         .padding(.horizontal, 18).padding(.vertical, 12)
@@ -240,6 +266,41 @@ struct LibraryView: View {
             }
         }
     }
+
+    private func startExport(_ book: ReaderBook) {
+        exportingName = book.title
+        exportTask = Task {
+            defer { exportTask = nil; exportingName = nil }
+            do {
+                let url = try await store.exportFile(for: book)
+                guard !Task.isCancelled else {
+                    try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+                    return
+                }
+                exported = ExportedFile(url: url)
+            } catch is CancellationError {
+            } catch {
+                exportError = error.localizedDescription
+            }
+        }
+    }
+}
+
+/// A book written out for sharing; its folder is temporary and removed when the share sheet closes.
+struct ExportedFile: Identifiable {
+    let url: URL
+    var id: URL { url }
+}
+
+/// The system share sheet, which also offers "Save to Files".
+struct ShareSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 /// The EPUB's own cover when it has one, otherwise a generated title cover.

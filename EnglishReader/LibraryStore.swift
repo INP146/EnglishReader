@@ -1,9 +1,9 @@
 import Foundation
 import Observation
 
-/// Library metadata and saved words live in one small JSON file; each book's
-/// text lives in its own file under `books/`, written once at import. Saving a
-/// position or a word therefore rewrites kilobytes, never whole books.
+/// Library metadata and saved words live in one small JSON file; each book has
+/// its own directory under `books/` (see `BookDirectory`), written once at
+/// import. Saving a position or a word therefore rewrites kilobytes, never books.
 @MainActor @Observable
 final class LibraryStore {
     private(set) var books: [ReaderBook] = []
@@ -32,15 +32,35 @@ final class LibraryStore {
             .appendingPathComponent("EnglishReader", isDirectory: true)
             .appendingPathComponent("library.json")
         load()
+        // An import that was interrupted leaves its unpacked files behind.
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: booksDirectory.path)) ?? [] where name.hasSuffix(".partial") {
+            try? FileManager.default.removeItem(at: booksDirectory.appendingPathComponent(name))
+        }
     }
 
     private var booksDirectory: URL { fileURL.deletingLastPathComponent().appendingPathComponent("books", isDirectory: true) }
 
-    private func contentURL(for id: UUID) -> URL { booksDirectory.appendingPathComponent("\(id.uuidString).json") }
+    func directory(for id: UUID) -> BookDirectory { BookDirectory(url: booksDirectory.appendingPathComponent(id.uuidString, isDirectory: true)) }
 
-    private func coverFileURL(for id: UUID) -> URL { booksDirectory.appendingPathComponent("\(id.uuidString)-cover.jpg") }
+    // Books imported before each had a directory kept text and cover beside it, in files named for the book.
+    private func legacyContentURL(for id: UUID) -> URL { booksDirectory.appendingPathComponent("\(id.uuidString).json") }
 
-    func coverURL(for book: ReaderBook) -> URL? { book.coverAspectRatio == nil ? nil : coverFileURL(for: book.id) }
+    private func legacyCoverURL(for id: UUID) -> URL { booksDirectory.appendingPathComponent("\(id.uuidString)-cover.jpg") }
+
+    func coverURL(for book: ReaderBook) -> URL? {
+        guard book.coverAspectRatio != nil else { return nil }
+        let current = directory(for: book.id).cover
+        return FileManager.default.fileExists(atPath: current.path) ? current : legacyCoverURL(for: book.id)
+    }
+
+    /// Where the book's images are, for drawing them; nil for the sample.
+    func resourcesURL(for book: ReaderBook) -> URL? { book.isSample ? nil : directory(for: book.id).resources }
+
+    /// Runs blocking work off the main thread, cancelling it when the caller is cancelled.
+    private func detached<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        let task = Task.detached(priority: .userInitiated, operation: work)
+        return try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+    }
 
     // MARK: Loading and recovery
 
@@ -97,10 +117,12 @@ final class LibraryStore {
     func content(for book: ReaderBook) async throws -> BookContent {
         if book.isSample { return SampleBook.content() }
         if let contentCache, contentCache.id == book.id { return contentCache.content }
-        let url = contentURL(for: book.id)
-        let content = try await Task.detached(priority: .userInitiated) {
-            try JSONDecoder().decode(BookContent.self, from: Data(contentsOf: url))
-        }.value
+        let current = directory(for: book.id).content
+        let legacy = legacyContentURL(for: book.id)
+        let content = try await detached {
+            let url = FileManager.default.fileExists(atPath: current.path) ? current : legacy
+            return try JSONDecoder().decode(BookContent.self, from: Data(contentsOf: url))
+        }
         contentCache = (book.id, content)
         return content
     }
@@ -109,32 +131,58 @@ final class LibraryStore {
         try ensureReadable()
         let hasAccess = url.startAccessingSecurityScopedResource()
         defer { if hasAccess { url.stopAccessingSecurityScopedResource() } }
-        let task = Task.detached(priority: .userInitiated) { try BookImporter.load(url: url) }
-        let imported = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+        // The same bytes are the same book under any name, so look before unpacking anything.
+        let fingerprint = try await detached { try BookImporter.fingerprint(of: url) }
         try Task.checkCancellation()
-        if let existingID = fingerprints[imported.fingerprint], books.contains(where: { $0.id == existingID }) {
+        if let existingID = fingerprints[fingerprint], books.contains(where: { $0.id == existingID }) {
             throw LibraryError.duplicate(existingID)
         }
-        let destination = contentURL(for: imported.book.id)
-        let coverDestination = coverFileURL(for: imported.book.id)
-        let content = imported.content
-        let cover = imported.cover
+        let id = UUID()
+        let staging = booksDirectory.appendingPathComponent("\(id.uuidString).partial", isDirectory: true)
+        let destination = directory(for: id)
+        defer { try? FileManager.default.removeItem(at: staging) }
+        let imported = try await detached { try BookImporter.load(url: url, id: id, staging: staging, fingerprint: fingerprint) }
+        try Task.checkCancellation()
         do {
-            try await Task.detached(priority: .userInitiated) {
-                let data = try JSONEncoder().encode(content)
-                try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try data.write(to: destination, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-                try cover?.write(to: coverDestination, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            }.value
+            try await detached {
+                let files = BookDirectory(url: staging)
+                let encoder = JSONEncoder()
+                let options: Data.WritingOptions = [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+                try encoder.encode(imported.content).write(to: files.content, options: options)
+                try encoder.encode(imported.package).write(to: files.package, options: options)
+                try imported.cover?.write(to: files.cover, options: options)
+                // The book appears all at once or not at all.
+                try FileManager.default.moveItem(at: staging, to: destination.url)
+            }
             try commit(books: [imported.book] + books, favorites: favorites,
                        fingerprints: fingerprints.merging([imported.fingerprint: imported.book.id]) { _, new in new })
         } catch {
-            try? FileManager.default.removeItem(at: destination)
-            try? FileManager.default.removeItem(at: coverDestination)
+            try? FileManager.default.removeItem(at: destination.url)
             throw error
         }
         contentCache = (imported.book.id, imported.content)
         return imported.book.id
+    }
+
+    /// Writes the book to a temporary file, an EPUB for an EPUB import, and returns it.
+    /// The caller removes the file's folder when it is done with it.
+    func exportFile(for book: ReaderBook) async throws -> URL {
+        guard book.canExport else { throw BookExporter.ExportError.incomplete }
+        let files = directory(for: book.id)
+        let title = book.title
+        return try await detached {
+            let package = try JSONDecoder().decode(BookPackage.self, from: Data(contentsOf: files.package))
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("export-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            do {
+                let file = folder.appendingPathComponent(BookExporter.fileName(for: title, kind: package.kind))
+                try BookExporter.export(files, package: package, to: file)
+                return file
+            } catch {
+                try? FileManager.default.removeItem(at: folder)
+                throw error
+            }
+        }
     }
 
     func addSample() {
@@ -146,8 +194,9 @@ final class LibraryStore {
     func removeBook(id: UUID) {
         perform {
             try commit(books: books.filter { $0.id != id }, favorites: favorites, fingerprints: fingerprints.filter { $0.value != id })
-            try? FileManager.default.removeItem(at: contentURL(for: id))
-            try? FileManager.default.removeItem(at: coverFileURL(for: id))
+            try? FileManager.default.removeItem(at: directory(for: id).url)
+            try? FileManager.default.removeItem(at: legacyContentURL(for: id))
+            try? FileManager.default.removeItem(at: legacyCoverURL(for: id))
             if contentCache?.id == id { contentCache = nil }
         }
     }
@@ -302,7 +351,7 @@ final class LibraryStore {
                 })
                 let data = try JSONEncoder().encode(content)
                 try FileManager.default.createDirectory(at: booksDirectory, withIntermediateDirectories: true)
-                try data.write(to: contentURL(for: old.id), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                try data.write(to: legacyContentURL(for: old.id), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             }
             let pairs = zip(old.chapters, content.chapters).map { ($0.text, $1.text) }
             mappings[old.id] = pairs

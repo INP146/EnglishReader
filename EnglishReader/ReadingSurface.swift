@@ -40,6 +40,10 @@ struct ReadingSurface: UIViewRepresentable {
     var interactive = true
     /// Auto reading reached the end of the chapter.
     var onReachEnd: () -> Void = {}
+    /// Where the book's image files are; without it pictures are left out.
+    var resources: URL?
+    /// A link was tapped; the argument is its target as stored in the chapter.
+    var onTapLink: (String) -> Void = { _ in }
 
     nonisolated private static let wordPattern = try! NSRegularExpression(pattern: #"[A-Za-z]+(?:['’‐‑-][A-Za-z]+)*"#)
 
@@ -49,7 +53,7 @@ struct ReadingSurface: UIViewRepresentable {
 
     /// The exact string the view displays is chapter.text, so stored offsets never drift.
     static func attributedText(for chapter: ReaderChapter, size: CGFloat, layout: ReaderLayout = ReaderLayout(),
-                               ink: UIColor = .readerInk) -> NSAttributedString {
+                               ink: UIColor = .readerInk, resources: URL? = nil) -> NSAttributedString {
         let result = NSMutableAttributedString(string: chapter.text)
         let full = NSRange(location: 0, length: result.length)
         let face = layout.typeface
@@ -62,23 +66,71 @@ struct ReadingSurface: UIViewRepresentable {
         result.addAttributes([.font: ReaderTypography.font(face, size: size), .foregroundColor: ink,
                               .paragraphStyle: paragraph, .accessibilitySpeechLanguage: "en-US"], range: full)
         let text = chapter.text as NSString
-        for run in chapter.styles where run.location >= 0 && NSMaxRange(run.range) <= result.length {
+        let runs = chapter.styles.filter { $0.location >= 0 && $0.length > 0 && NSMaxRange($0.range) <= result.length }
+
+        /// Changes the font of a range, keeping its traits.
+        func restyle(_ range: NSRange, _ change: (UIFont) -> UIFont) {
+            result.enumerateAttribute(.font, in: range) { value, part, _ in
+                if let font = value as? UIFont { result.addAttribute(.font, value: change(font), range: part) }
+            }
+        }
+        /// Changes the paragraph style of every paragraph a range touches.
+        func adjust(_ range: NSRange, _ change: (NSMutableParagraphStyle) -> Void) {
+            result.enumerateAttribute(.paragraphStyle, in: text.paragraphRange(for: range)) { value, part, _ in
+                let style = NSMutableParagraphStyle()
+                style.setParagraphStyle((value as? NSParagraphStyle) ?? paragraph)
+                change(style)
+                result.addAttribute(.paragraphStyle, value: style, range: part)
+            }
+        }
+
+        // Inline styles and headings first; the paragraph-level ones below adjust the paragraph styles they leave.
+        for run in runs {
             switch run.style {
             case .italic, .bold:
                 let trait: UIFontDescriptor.SymbolicTraits = run.style == .italic ? .traitItalic : .traitBold
-                result.enumerateAttribute(.font, in: run.range) { value, range, _ in
-                    guard let font = value as? UIFont else { return }
+                restyle(run.range) { font in
                     let traits = font.fontDescriptor.symbolicTraits.union(trait).intersection([.traitItalic, .traitBold])
-                    result.addAttribute(.font, value: ReaderTypography.font(face, size: font.pointSize, traits: traits), range: range)
+                    return ReaderTypography.font(face, size: font.pointSize, traits: traits)
                 }
+            case .sup, .sub:
+                restyle(run.range) { UIFont(descriptor: $0.fontDescriptor, size: $0.pointSize * 0.72) }
+                result.addAttribute(.baselineOffset, value: run.style == .sup ? size * 0.34 : -size * 0.14, range: run.range)
+            case .code:
+                result.addAttribute(.font, value: UIFont.monospacedSystemFont(ofSize: size * 0.88, weight: .regular), range: run.range)
+            case .strike:
+                result.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: run.range)
+            case .link:
+                guard let target = run.value else { continue }
+                result.addAttributes([.foregroundColor: UIColor.readerAccent, .readerLink: target], range: run.range)
+            case .image:
+                guard let resources, let file = run.value else { continue }
+                result.addAttribute(.attachment, value: ReaderImageAttachment(url: resources.appendingPathComponent(file), alt: run.alt), range: run.range)
             case .heading:
+                // Headings found in plain text have no level and keep the size they always had.
+                let scale: CGFloat = switch run.value { case "1": 1.4; case "2": 1.25; case "3": 1.12; case nil: 1.25; default: 1.0 }
                 let heading = NSMutableParagraphStyle()
                 heading.setParagraphStyle(paragraph)
                 heading.paragraphSpacingBefore = run.location == 0 ? 0 : size
                 heading.paragraphSpacing = max(size, paragraph.paragraphSpacing)
                 heading.hyphenationFactor = 0
-                result.addAttribute(.font, value: ReaderTypography.font(face, size: size * 1.25, traits: .traitBold), range: run.range)
+                result.addAttribute(.font, value: ReaderTypography.font(face, size: size * scale, traits: .traitBold), range: run.range)
                 result.addAttribute(.paragraphStyle, value: heading, range: text.paragraphRange(for: run.range))
+            case .quote, .list, .center:
+                break
+            }
+        }
+        for run in runs {
+            switch run.style {
+            case .quote: adjust(run.range) { $0.firstLineHeadIndent += 22; $0.headIndent += 22 }
+            case .list: adjust(run.range) { $0.firstLineHeadIndent += 20; $0.headIndent += 20; $0.paragraphSpacing = size * 0.25 }
+            case .center: adjust(run.range) { $0.alignment = .center; $0.hyphenationFactor = 0 }
+            case .image:
+                // A picture alone in its paragraph sits in the middle with no extra leading around it.
+                let own = text.paragraphRange(for: run.range)
+                guard text.substring(with: own).allSatisfy({ $0 == "\u{FFFC}" || $0 == "\n" }) else { continue }
+                adjust(run.range) { $0.alignment = .center; $0.lineHeightMultiple = 1 }
+            default: break
             }
         }
         return result
@@ -205,7 +257,7 @@ struct ReadingSurface: UIViewRepresentable {
                 let margin = value.layout.margin
                 view.textContainerInset = UIEdgeInsets(top: 24, left: margin, bottom: 96, right: margin)
                 view.attributedText = ReadingSurface.attributedText(for: value.chapter, size: size, layout: value.layout,
-                                                                    ink: value.palette.ink)
+                                                                    ink: value.palette.ink, resources: value.resources)
                 if chapterChanged {
                     wordRanges = ReadingSurface.englishWordRanges(in: value.chapter.text)
                     lastReported = nil
@@ -363,8 +415,11 @@ struct ReadingSurface: UIViewRepresentable {
         @objc private func tapped(_ gesture: UITapGestureRecognizer) {
             guard gesture.state == .ended, let view = textView, tapFilter.isQuickTap(in: view) else { return }
             guard parent.interactive else { parent.onTapBlank(); return }
-            if let range = ReaderTextTools.wordRange(at: gesture.location(in: view), in: view, words: wordRanges),
-               let selection = ReaderTextTools.selection(for: range, in: view) {
+            let location = gesture.location(in: view)
+            if let target = ReaderTextTools.link(at: location, in: view) {
+                parent.onTapLink(target)
+            } else if let range = ReaderTextTools.wordRange(at: location, in: view, words: wordRanges),
+                      let selection = ReaderTextTools.selection(for: range, in: view) {
                 flash.show(range, in: view.textStorage)
                 parent.onTapWord(selection)
             } else {
@@ -427,16 +482,26 @@ struct ReadingSurface: UIViewRepresentable {
 /// view whose storage holds the whole chapter text.
 @MainActor
 enum ReaderTextTools {
-    static func wordRange(at location: CGPoint, in view: UITextView, words: [NSRange]) -> NSRange? {
+    /// The character under a point, or nil in margins, paragraph gaps and below the last line.
+    static func characterIndex(at location: CGPoint, in view: UITextView) -> Int? {
         guard view.textStorage.length > 0 else { return nil }
         let point = CGPoint(x: location.x - view.textContainerInset.left, y: location.y - view.textContainerInset.top)
         let manager = view.layoutManager
         let glyph = manager.glyphIndex(for: point, in: view.textContainer)
         guard glyph < manager.numberOfGlyphs else { return nil }
         let rect = manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: view.textContainer)
-        // Margins, paragraph gaps and space below the last line are not words.
         guard rect.insetBy(dx: -3, dy: -2).contains(point) else { return nil }
-        return wordRange(containing: manager.characterIndexForGlyph(at: glyph), in: words)
+        return manager.characterIndexForGlyph(at: glyph)
+    }
+
+    static func wordRange(at location: CGPoint, in view: UITextView, words: [NSRange]) -> NSRange? {
+        characterIndex(at: location, in: view).flatMap { wordRange(containing: $0, in: words) }
+    }
+
+    /// The target of the link under a point, if there is one.
+    static func link(at location: CGPoint, in view: UITextView) -> String? {
+        guard let index = characterIndex(at: location, in: view) else { return nil }
+        return view.textStorage.attribute(.readerLink, at: index, effectiveRange: nil) as? String
     }
 
     static func wordRange(containing offset: Int, in words: [NSRange]) -> NSRange? {
@@ -474,6 +539,7 @@ enum ReaderTextTools {
         }
         let sentence = string.substring(with: context ?? paragraphRange)
             .replacingOccurrences(of: ChapterTextBuilder.lineSeparator, with: " ")
+            .replacingOccurrences(of: ChapterTextBuilder.attachment, with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let glyphs = view.layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
         let rect = view.layoutManager.boundingRect(forGlyphRange: glyphs, in: view.textContainer)

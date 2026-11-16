@@ -51,8 +51,10 @@ struct LibraryTests {
         } catch LibraryError.duplicate(let existingID) {
             #expect(existingID == id)
         }
+        let files = reopened.directory(for: id)
+        #expect(FileManager.default.fileExists(atPath: files.content.path))
         reopened.removeBook(id: id)
-        #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("books/\(id.uuidString).json").path))
+        #expect(!FileManager.default.fileExists(atPath: files.url.path))
     }
 
     @Test func positionsWordsAndRemovalRoundTrip() async throws {
@@ -330,11 +332,15 @@ struct BookImporterTests {
         let huge = folder.appendingPathComponent("huge.epub")
         #expect(FileManager.default.createFile(atPath: huge.path, contents: nil))
         let handle = try FileHandle(forWritingTo: huge)
-        try handle.truncate(atOffset: UInt64(40 * 1_024 * 1_024 + 1))
+        // Sparse, so the test doesn't write a gigabyte.
+        try handle.truncate(atOffset: UInt64(1 << 30) + 1)
         try handle.close()
-        #expect(throws: BookImporter.ImportError.self) { _ = try BookImporter.load(url: huge) }
-        // Nine declared 15 MiB entries fit the per-entry ceiling but exceed the 120 MiB sum.
-        let extras: [(String, Data, UInt32?)] = (0..<9).map { ("images/\($0).bin", Data(), UInt32(15 * 1_024 * 1_024)) }
+        do {
+            _ = try BookImporter.load(url: huge)
+            Issue.record("A file over the size limit must be rejected before it is read")
+        } catch BookImporter.ImportError.tooLarge { }
+        // Five declared 500 MiB entries fit the per-entry ceiling but exceed the 2 GiB sum.
+        let extras: [(String, Data, UInt32?)] = (0..<5).map { ("images/\($0).bin", Data(), UInt32(500 * 1_024 * 1_024)) }
         let bomb = folder.appendingPathComponent("expanded.epub")
         try epubFixture(extras: extras).write(to: bomb)
         do {
@@ -413,18 +419,26 @@ struct BookImporterTests {
         let paragraph = String(repeating: "Lorem ipsum dolor sit amet. ", count: 40)
         var builder = ChapterTextBuilder()
         for index in 0..<200 {
-            if index == 150 { builder.italic += 1 }
+            if index == 150 { builder.push(.italic); builder.anchor("deep") }
             builder.append(paragraph)
-            if index == 150 { builder.italic -= 1 }
+            if index == 150 { builder.pop(.italic) }
             builder.paragraphBreak()
         }
         let result = builder.finish()
-        let pieces = ChapterLayout.split(ReaderChapter(id: "c", title: "Long", text: result.text, styles: result.styles), maximumLength: 30_000)
+        let pieces = ChapterLayout.split(ReaderChapter(id: "c", title: "Long", text: result.text, styles: result.styles,
+                                                       source: "a.xhtml", anchors: result.anchors), maximumLength: 30_000)
         #expect(pieces.count > 1)
         #expect(pieces.allSatisfy { $0.text.utf16.count <= 30_000 })
         #expect(pieces.map(\.text).joined(separator: "\n") == result.text)
         let styled = pieces.flatMap { piece in piece.styles.map { (piece.text as NSString).substring(with: $0.range) } }
         #expect(styled == [paragraph.trimmingCharacters(in: .whitespaces)])
+        // The anchor moves with its paragraph into the piece that holds it.
+        let holder = try #require(pieces.first { $0.anchors["deep"] != nil })
+        #expect(holder.styles.first?.location == holder.anchors["deep"])
+        #expect(pieces.allSatisfy { $0.source == "a.xhtml" })
+        let place = try #require(BookContent(chapters: pieces).location(ofPath: "a.xhtml", fragment: "deep"))
+        #expect(pieces[place.chapter].id == holder.id)
+        #expect(BookContent(chapters: pieces).location(ofPath: "a.xhtml", fragment: "missing").map { [$0.chapter, $0.offset] } == [0, 0])
     }
 }
 
@@ -484,11 +498,11 @@ struct ReadingSurfaceContractTests {
     }
 }
 
-private func replacingSecondChapter(with chapter: String) -> [(String, Data, UInt32?)] {
+func replacingSecondChapter(with chapter: String) -> [(String, Data, UInt32?)] {
     fixtureEntries().map { $0.0 == "OPS/two.xhtml" ? ($0.0, Data(chapter.utf8), $0.2) : $0 }
 }
 
-private func scratchDirectory() throws -> URL {
+func scratchDirectory() throws -> URL {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("EnglishReaderTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory
@@ -529,7 +543,7 @@ private func fixtureEntries(ncx: Bool = false, externalDoctype: Bool = false, fi
 }
 
 /// Minimal standards-compliant stored ZIP fixture writer. No test dependency on ZIPFoundation.
-private func storedZIP(_ entries: [(String, Data, UInt32?)]) -> Data {
+func storedZIP(_ entries: [(String, Data, UInt32?)]) -> Data {
     var result = Data()
     var directory = Data()
     for (path, payload, declaredSize) in entries {
@@ -558,7 +572,7 @@ private func storedZIP(_ entries: [(String, Data, UInt32?)]) -> Data {
     return result
 }
 
-private func fixtureCRC32(_ data: Data) -> UInt32 {
+func fixtureCRC32(_ data: Data) -> UInt32 {
     var crc: UInt32 = 0xFFFF_FFFF
     for byte in data {
         crc ^= UInt32(byte)
@@ -567,7 +581,7 @@ private func fixtureCRC32(_ data: Data) -> UInt32 {
     return crc ^ 0xFFFF_FFFF
 }
 
-private extension Data {
+extension Data {
     mutating func appendLE<T: FixedWidthInteger>(_ value: T) {
         var littleEndian = value.littleEndian
         Swift.withUnsafeBytes(of: &littleEndian) { append(contentsOf: $0) }

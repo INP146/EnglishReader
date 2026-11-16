@@ -9,3 +9,4 @@ xcuserdata/
 
 # 本地签名材料（证书、私钥、描述文件）
 .signing/
+.local

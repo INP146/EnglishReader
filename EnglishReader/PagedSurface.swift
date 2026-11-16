@@ -39,6 +39,10 @@ struct PagedSurface: UIViewControllerRepresentable {
     var onChapterTurn: (_ forward: Bool) -> Void
     /// Tried to turn past the first or last page of the book.
     var onBoundary: (_ forward: Bool) -> Void
+    /// Where the book's image files are; without it pictures are left out.
+    var resources: URL?
+    /// A link was tapped; the argument is its target as stored in the chapter.
+    var onTapLink: (String) -> Void = { _ in }
 
     func makeUIViewController(context: Context) -> PagerController { PagerController(self) }
 
@@ -60,10 +64,12 @@ final class PagedChapter {
     var marked: [NSRange] = []
     var cache: [Int: PageController] = [:]
 
-    init(_ chapter: ReaderChapter, number: Int, size: CGFloat, layout: ReaderLayout, ink: UIColor, pageSize: CGSize, forms: Set<String>) {
+    init(_ chapter: ReaderChapter, number: Int, size: CGFloat, layout: ReaderLayout, ink: UIColor, pageSize: CGSize, forms: Set<String>,
+         resources: URL?) {
         self.chapter = chapter
         self.number = number
-        storage = NSTextStorage(attributedString: ReadingSurface.attributedText(for: chapter, size: size, layout: layout, ink: ink))
+        storage = NSTextStorage(attributedString: ReadingSurface.attributedText(for: chapter, size: size, layout: layout, ink: ink,
+                                                                                resources: resources))
         storage.addLayoutManager(manager)
         wordRanges = ReadingSurface.englishWordRanges(in: chapter.text)
         var end = 0
@@ -255,7 +261,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
 
     private func makeLayout(for chapter: ReaderChapter, number: Int) -> PagedChapter {
         PagedChapter(chapter, number: number, size: ReaderTypography.pointSize(config.layout.fontSize), layout: config.layout,
-                     ink: config.palette.ink, pageSize: textFrame.size, forms: config.learningForms)
+                     ink: config.palette.ink, pageSize: textFrame.size, forms: config.learningForms, resources: config.resources)
     }
 
     /// The neighbouring chapter, laid out on first use.
@@ -459,12 +465,17 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         guard gesture.state == .ended, let book, let text = currentTextView, tapFilter.isQuickTap(in: text) else { return }
         guard config.interactive else { config.onTapBlank(); return }
         let location = gesture.location(in: text)
-        if text.bounds.contains(location),
-           let range = ReaderTextTools.wordRange(at: location, in: text, words: book.wordRanges),
-           let selection = ReaderTextTools.selection(for: range, in: text) {
-            flash.show(range, in: book.storage)
-            config.onTapWord(selection)
-            return
+        if text.bounds.contains(location) {
+            if let target = ReaderTextTools.link(at: location, in: text) {
+                config.onTapLink(target)
+                return
+            }
+            if let range = ReaderTextTools.wordRange(at: location, in: text, words: book.wordRanges),
+               let selection = ReaderTextTools.selection(for: range, in: text) {
+                flash.show(range, in: book.storage)
+                config.onTapWord(selection)
+                return
+            }
         }
         let x = gesture.location(in: view).x / max(view.bounds.width, 1)
         if config.edgeTapsTurnPages, x < 0.3 || x > 0.7 {
