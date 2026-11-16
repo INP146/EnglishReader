@@ -36,6 +36,8 @@ struct ReadingSurface: UIViewRepresentable {
     var onScroll: () -> Void
     var onLookup: (ReadingSelection) -> Void
     var onSave: (ReadingSelection) -> Void
+    /// False while the toolbars are up: taps only dismiss them, and words can't be looked up or selected.
+    var interactive = true
     /// Auto reading reached the end of the chapter.
     var onReachEnd: () -> Void = {}
 
@@ -226,6 +228,7 @@ struct ReadingSurface: UIViewRepresentable {
                 pendingHighlight = jump.highlight ? jump.offset : nil
                 view.setNeedsLayout()
             }
+            if view.isSelectable != value.interactive { view.isSelectable = value.interactive }
             if value.autoScrollSpeed != nil { startAutoScroll() } else { stopAutoScroll() }
         }
 
@@ -359,6 +362,7 @@ struct ReadingSurface: UIViewRepresentable {
 
         @objc private func tapped(_ gesture: UITapGestureRecognizer) {
             guard gesture.state == .ended, let view = textView, tapFilter.isQuickTap(in: view) else { return }
+            guard parent.interactive else { parent.onTapBlank(); return }
             if let range = ReaderTextTools.wordRange(at: gesture.location(in: view), in: view, words: wordRanges),
                let selection = ReaderTextTools.selection(for: range, in: view) {
                 flash.show(range, in: view.textStorage)
@@ -495,6 +499,13 @@ enum ReaderTextTools {
     }
 
     /// Attribute-only edits; the string never changes.
+    /// Occurrences of words still being learned, for the dotted underline.
+    static func markedRanges(in text: String, words: [NSRange], forms: Set<String>) -> [NSRange] {
+        guard !forms.isEmpty else { return [] }
+        let string = text as NSString
+        return words.filter { forms.contains(WordDictionary.normalize(string.substring(with: $0))) }
+    }
+
     static func applyMarks(_ ranges: [NSRange], replacing old: [NSRange], in storage: NSTextStorage) {
         let length = storage.length
         storage.beginEditing()

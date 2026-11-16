@@ -1,13 +1,19 @@
 import SwiftUI
 import UIKit
 
-/// Page-by-page reading. One layout manager lays the whole chapter into a
+/// Page-by-page reading. One layout manager lays a whole chapter into a
 /// chain of page-sized text containers; each page's text view shows one
 /// container, so offsets, hit-testing and the edit menu use the same chapter
-/// coordinates as the scrolling surface.
+/// coordinates as the scrolling surface. The neighbouring chapters are laid
+/// out too, so turning across a chapter boundary is an ordinary page turn.
 @MainActor
 struct PagedSurface: UIViewControllerRepresentable {
     var chapter: ReaderChapter
+    /// Zero-based, for the "chapter n of m" footer.
+    var chapterIndex: Int
+    var chapterCount: Int
+    var previousChapter: ReaderChapter?
+    var nextChapter: ReaderChapter?
     var layout: ReaderLayout
     var palette: ReaderPalette
     var backdrop: ReaderBackdrop
@@ -15,9 +21,10 @@ struct PagedSurface: UIViewControllerRepresentable {
     var turn: PageTurn
     var initialOffset: Int
     var jump: JumpRequest?
-    var markedRanges: [NSRange]
-    var hasPrevious: Bool
-    var hasNext: Bool
+    /// Words still being learned; every occurrence gets a dotted underline.
+    var learningForms: Set<String>
+    /// False while the toolbars are up: taps only dismiss them, and words can't be looked up or selected.
+    var interactive: Bool
     /// While the lookup card or toolbars are up, edge taps close them instead of turning.
     var edgeTapsTurnPages: Bool
     /// Seconds per page while auto reading.
@@ -28,7 +35,9 @@ struct PagedSurface: UIViewControllerRepresentable {
     var onTurn: () -> Void
     var onLookup: (ReadingSelection) -> Void
     var onSave: (ReadingSelection) -> Void
-    /// Turned past the first or last page.
+    /// A page turn carried reading into the neighbouring chapter, which this surface now shows.
+    var onChapterTurn: (_ forward: Bool) -> Void
+    /// Tried to turn past the first or last page of the book.
     var onBoundary: (_ forward: Bool) -> Void
 
     func makeUIViewController(context: Context) -> PagerController { PagerController(self) }
@@ -38,17 +47,59 @@ struct PagedSurface: UIViewControllerRepresentable {
     static func dismantleUIViewController(_ controller: PagerController, coordinator: ()) { controller.stopAutoTurn() }
 }
 
+/// One chapter laid out into page-sized text containers.
+@MainActor
+final class PagedChapter {
+    let chapter: ReaderChapter
+    let number: Int
+    let storage: NSTextStorage
+    let manager = NSLayoutManager()
+    private(set) var containers: [NSTextContainer] = []
+    private(set) var pages: [NSRange] = []
+    let wordRanges: [NSRange]
+    var marked: [NSRange] = []
+    var cache: [Int: PageController] = [:]
+
+    init(_ chapter: ReaderChapter, number: Int, size: CGFloat, layout: ReaderLayout, ink: UIColor, pageSize: CGSize, forms: Set<String>) {
+        self.chapter = chapter
+        self.number = number
+        storage = NSTextStorage(attributedString: ReadingSurface.attributedText(for: chapter, size: size, layout: layout, ink: ink))
+        storage.addLayoutManager(manager)
+        wordRanges = ReadingSurface.englishWordRanges(in: chapter.text)
+        var end = 0
+        repeat {
+            let container = NSTextContainer(size: pageSize)
+            container.lineFragmentPadding = 0
+            manager.addTextContainer(container)
+            let glyphs = manager.glyphRange(for: container)
+            // A line taller than the page can never be placed; stop rather than loop.
+            guard glyphs.length > 0 || containers.isEmpty else { manager.removeTextContainer(at: containers.count); break }
+            containers.append(container)
+            pages.append(manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil))
+            end = NSMaxRange(glyphs)
+        } while end < manager.numberOfGlyphs
+        applyMarks(forms)
+    }
+
+    func applyMarks(_ forms: Set<String>) {
+        let ranges = ReaderTextTools.markedRanges(in: chapter.text, words: wordRanges, forms: forms)
+        guard ranges != marked else { return }
+        ReaderTextTools.applyMarks(ranges, replacing: marked, in: storage)
+        marked = ranges
+    }
+
+    func pageIndex(containing offset: Int) -> Int {
+        pages.firstIndex { offset < NSMaxRange($0) } ?? max(0, pages.count - 1)
+    }
+}
+
 final class PagerController: UIViewController, UIPageViewControllerDataSource, UIPageViewControllerDelegate,
                              UITextViewDelegate, UIGestureRecognizerDelegate {
     private var config: PagedSurface
-    private var storage = NSTextStorage()
-    private var manager = NSLayoutManager()
-    private var containers: [NSTextContainer] = []
-    private var pages: [NSRange] = []
-    private var wordRanges: [NSRange] = []
-    private var marked: [NSRange] = []
+    private var book: PagedChapter?
+    private var previousLayout: PagedChapter?
+    private var nextLayout: PagedChapter?
     private var current = 0
-    private var cache: [Int: PageController] = [:]
     private var renderedKey: RenderKey?
     private var anchor: Int
     private var pendingJump: JumpRequest?
@@ -61,6 +112,8 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     private let host = UIView()
     private var hosted: PageController?
     private var animating = false
+    /// Set after crossing into a neighbouring chapter, until the pager has re-asked for the new neighbours.
+    private var pagerNeedsRefresh = false
     private var autoTurn: (interval: Double, task: Task<Void, Never>)?
 
     private struct RenderKey: Equatable {
@@ -84,7 +137,6 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         super.viewDidLoad()
         view.backgroundColor = config.palette.paper
         view.accessibilityIdentifier = "reading-pages"
-        wordRanges = ReadingSurface.englishWordRanges(in: config.chapter.text)
         if config.turn == .curl || config.turn == .slide {
             let pager = UIPageViewController(transitionStyle: config.turn == .curl ? .pageCurl : .scroll,
                                              navigationOrientation: .horizontal,
@@ -122,31 +174,44 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         renderIfNeeded()
     }
 
+    private var layouts: [PagedChapter] { [previousLayout, book, nextLayout].compactMap { $0 } }
+
     func update(_ value: PagedSurface) {
         let old = config
         config = value
         if old.backdrop != value.backdrop || old.backdropVersion != value.backdropVersion {
-            for page in cache.values { page.backdrop.backdrop = value.backdrop; page.backdrop.refresh() }
+            for page in layouts.flatMap(\.cache.values) { page.backdrop.backdrop = value.backdrop; page.backdrop.refresh() }
+        }
+        if old.interactive != value.interactive {
+            for page in layouts.flatMap(\.cache.values) { page.textView?.isSelectable = value.interactive }
         }
         if let jump = value.jump, jump.id != lastJumpID {
             lastJumpID = jump.id
             pendingJump = jump
         }
+        // Neighbours laid out for another chapter (after a jump through the contents, say) are stale.
+        if previousLayout?.chapter.id != value.previousChapter?.id { previousLayout = nil }
+        if nextLayout?.chapter.id != value.nextChapter?.id { nextLayout = nil }
         renderIfNeeded()
-        if marked != value.markedRanges, !pages.isEmpty {
-            ReaderTextTools.applyMarks(value.markedRanges, replacing: marked, in: storage)
-            marked = value.markedRanges
-        }
-        if let jump = pendingJump, !pages.isEmpty {
+        if old.learningForms != value.learningForms { layouts.forEach { $0.applyMarks(value.learningForms) } }
+        if let jump = pendingJump, let book {
             pendingJump = nil
-            show(pageIndex(containing: jump.offset), forward: true, animated: false)
+            show(book.pageIndex(containing: jump.offset), of: book, forward: true, animated: false)
             if jump.highlight {
-                let range = ReaderTextTools.wordRange(containing: jump.offset, in: wordRanges)
-                    ?? NSRange(location: min(jump.offset, max(0, storage.length - 1)), length: storage.length > 0 ? 1 : 0)
-                flash.show(range, in: storage)
+                let range = ReaderTextTools.wordRange(containing: jump.offset, in: book.wordRanges)
+                    ?? NSRange(location: min(jump.offset, max(0, book.storage.length - 1)), length: book.storage.length > 0 ? 1 : 0)
+                flash.show(range, in: book.storage)
             }
         }
         if value.autoTurnInterval != autoTurn?.interval { restartAutoTurn() }
+        refreshPagerIfNeeded()
+    }
+
+    /// Page view controllers cache "no page" past an end; once the new chapter's neighbours are known, ask again.
+    private func refreshPagerIfNeeded() {
+        guard pagerNeedsRefresh, !animating, let pager, let book, let page = book.cache[current] else { return }
+        pagerNeedsRefresh = false
+        pager.setViewControllers([page], direction: .forward, animated: false)
     }
 
     // MARK: Pagination
@@ -162,68 +227,64 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
                       height: max(1, view.bounds.height - insets.top - 34 - max(insets.bottom, 12) - 30))
     }
 
+    private func renderKey(for chapterID: String) -> RenderKey {
+        RenderKey(chapterID: chapterID, size: ReaderTypography.pointSize(config.layout.fontSize), layout: config.layout,
+                  palette: config.palette, bounds: view.bounds.size, insets: safeInsets)
+    }
+
     private func renderIfNeeded() {
         guard isViewLoaded, view.bounds.width > 1, view.bounds.height > 1, view.window != nil else { return }
-        let size = ReaderTypography.pointSize(config.layout.fontSize)
-        let key = RenderKey(chapterID: config.chapter.id, size: size, layout: config.layout, palette: config.palette,
-                            bounds: view.bounds.size, insets: safeInsets)
+        let key = renderKey(for: config.chapter.id)
         guard key != renderedKey else { return }
-        if renderedKey != nil, pages.indices.contains(current) { anchor = pages[current].location }
+        if let book, book.chapter.id == config.chapter.id, book.pages.indices.contains(current) {
+            anchor = book.pages[current].location
+        } else if renderedKey != nil {
+            anchor = max(0, config.initialOffset) // Opened another chapter.
+        }
         renderedKey = key
         view.backgroundColor = config.palette.paper
-        paginate(size: size)
-        marked = []
-        if !config.markedRanges.isEmpty {
-            ReaderTextTools.applyMarks(config.markedRanges, replacing: [], in: storage)
-            marked = config.markedRanges
-        }
+        flash.cancel()
+        previousLayout = nil
+        nextLayout = nil
+        let book = makeLayout(for: config.chapter, number: config.chapterIndex)
+        self.book = book
         current = -1
         lastReported = nil
-        show(pageIndex(containing: anchor), forward: true, animated: false)
+        show(book.pageIndex(containing: anchor), of: book, forward: true, animated: false)
     }
 
-    private func paginate(size: CGFloat) {
-        flash.cancel()
-        cache.removeAll()
-        let attributed = ReadingSurface.attributedText(for: config.chapter, size: size, layout: config.layout, ink: config.palette.ink)
-        storage = NSTextStorage(attributedString: attributed)
-        manager = NSLayoutManager()
-        storage.addLayoutManager(manager)
-        containers = []
-        pages = []
-        let pageSize = textFrame.size
-        var end = 0
-        repeat {
-            let container = NSTextContainer(size: pageSize)
-            container.lineFragmentPadding = 0
-            manager.addTextContainer(container)
-            let glyphs = manager.glyphRange(for: container)
-            // A line taller than the page can never be placed; stop rather than loop.
-            guard glyphs.length > 0 || containers.isEmpty else { manager.removeTextContainer(at: containers.count); break }
-            containers.append(container)
-            pages.append(manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil))
-            end = NSMaxRange(glyphs)
-        } while end < manager.numberOfGlyphs
+    private func makeLayout(for chapter: ReaderChapter, number: Int) -> PagedChapter {
+        PagedChapter(chapter, number: number, size: ReaderTypography.pointSize(config.layout.fontSize), layout: config.layout,
+                     ink: config.palette.ink, pageSize: textFrame.size, forms: config.learningForms)
     }
 
-    private func pageIndex(containing offset: Int) -> Int {
-        pages.firstIndex { offset < NSMaxRange($0) } ?? max(0, pages.count - 1)
+    /// The neighbouring chapter, laid out on first use.
+    private func neighbour(forward: Bool) -> PagedChapter? {
+        if forward {
+            guard let chapter = config.nextChapter else { return nil }
+            if nextLayout == nil { nextLayout = makeLayout(for: chapter, number: config.chapterIndex + 1) }
+            return nextLayout
+        } else {
+            guard let chapter = config.previousChapter else { return nil }
+            if previousLayout == nil { previousLayout = makeLayout(for: chapter, number: config.chapterIndex - 1) }
+            return previousLayout
+        }
     }
 
-    private func page(_ index: Int) -> PageController {
-        if let page = cache[index] { return page }
-        let page = PageController(index: index)
+    private func page(_ index: Int, of layout: PagedChapter) -> PageController {
+        if let page = layout.cache[index] { return page }
+        let page = PageController(index: index, layout: layout)
         page.textFrame = { [weak self] in self?.textFrame ?? .zero }
         page.backdrop.palette = config.palette
         page.backdrop.backdrop = config.backdrop
         let secondary = config.palette.secondaryInk
         page.header.textColor = secondary
         page.footer.textColor = secondary
-        page.boundaryLabel.textColor = secondary
-        if containers.indices.contains(index) {
-            let text = UITextView(frame: textFrame, textContainer: containers[index])
+        page.progress.textColor = secondary
+        if layout.containers.indices.contains(index) {
+            let text = UITextView(frame: textFrame, textContainer: layout.containers[index])
             text.isEditable = false
-            text.isSelectable = true
+            text.isSelectable = config.interactive
             text.isScrollEnabled = false
             text.backgroundColor = .clear
             text.textContainerInset = .zero
@@ -232,39 +293,42 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
             text.delegate = self
             text.accessibilityHint = "可用辅助功能操作选择单词、查词或收藏。"
             page.textView = text
-            page.header.text = config.chapter.title
-            page.footer.text = "\(index + 1) / \(pages.count)"
-        } else {
-            page.boundaryLabel.text = index < 0 ? String(localized: "上一章") : String(localized: "下一章")
+            page.header.text = layout.chapter.title
+            page.footer.text = "\(index + 1) / \(layout.pages.count)"
+            let percent = Int(Double(index + 1) / Double(layout.pages.count) * 100)
+            page.progress.text = String(localized: "第 \(layout.number + 1)/\(max(config.chapterCount, 1)) 章 · 本章 \(percent)%")
         }
-        cache[index] = page
+        layout.cache[index] = page
         return page
     }
 
     // MARK: Turning
 
     private func turn(forward: Bool) {
-        guard !animating else { return }
+        guard !animating, let book else { return }
         let target = current + (forward ? 1 : -1)
-        guard pages.indices.contains(target) else {
-            if forward ? config.hasNext : config.hasPrevious { config.onBoundary(forward) }
-            return
+        if book.pages.indices.contains(target) {
+            config.onTurn()
+            show(target, of: book, forward: forward, animated: config.turn != .none)
+        } else if let neighbour = neighbour(forward: forward) {
+            config.onTurn()
+            show(forward ? 0 : neighbour.pages.count - 1, of: neighbour, forward: forward, animated: config.turn != .none)
+        } else {
+            config.onBoundary(forward)
         }
-        config.onTurn()
-        show(target, forward: forward, animated: config.turn != .none)
     }
 
-    private func show(_ index: Int, forward: Bool, animated: Bool) {
-        guard pages.indices.contains(index) else { return }
-        guard index != current else { reportPosition(); return }
-        current = index
-        let next = page(index)
+    private func show(_ index: Int, of layout: PagedChapter, forward: Bool, animated: Bool) {
+        guard layout.pages.indices.contains(index) else { return }
+        guard layout !== book || index != current else { reportPosition(); return }
+        let next = page(index, of: layout)
         if let pager {
             let direction: UIPageViewController.NavigationDirection = forward ? .forward : .reverse
             animating = animated
             pager.setViewControllers([next], direction: direction, animated: animated) { [weak self, weak pager] _ in
                 guard let self else { return }
                 self.animating = false
+                Task { @MainActor in self.refreshPagerIfNeeded() }
                 // Scroll-style pagers keep stale neighbours after an animated set.
                 if animated, self.config.turn == .slide, let pager {
                     Task { @MainActor in pager.setViewControllers([next], direction: direction, animated: false) }
@@ -273,6 +337,29 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         } else {
             showHosted(next, forward: forward, animated: animated)
         }
+        arrive(at: next)
+    }
+
+    /// Makes the page current, adopting its chapter when the turn crossed into a neighbour.
+    private func arrive(at page: PageController) {
+        guard let layout = page.layout else { return }
+        let crossed = layout !== book
+        if crossed {
+            let forward = layout === nextLayout
+            if forward { previousLayout = book; nextLayout = nil } else { nextLayout = book; previousLayout = nil }
+            // Until SwiftUI passes the new chapter's neighbours, only the one just left is known.
+            config.chapter = layout.chapter
+            config.chapterIndex = layout.number
+            config.previousChapter = forward ? book?.chapter : nil
+            config.nextChapter = forward ? nil : book?.chapter
+            pagerNeedsRefresh = pager != nil
+            book = layout
+            renderedKey?.chapterID = layout.chapter.id
+            lastReported = nil
+            flash.cancel()
+            config.onChapterTurn(forward)
+        }
+        current = page.index
         reportPosition()
     }
 
@@ -315,10 +402,10 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     }
 
     private func reportPosition() {
-        guard pages.indices.contains(current), lastReported != current else { return }
+        guard let book, book.pages.indices.contains(current), lastReported != current else { return }
         lastReported = current
-        let offset = pages[current].location
-        let fraction = Double(current + 1) / Double(pages.count)
+        let offset = book.pages[current].location
+        let fraction = Double(current + 1) / Double(book.pages.count)
         // Never change SwiftUI state inside updateUIViewController.
         Task { @MainActor [weak self] in self?.config.onPosition(offset, fraction) }
     }
@@ -330,14 +417,17 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     // MARK: UIPageViewController
 
     func pageViewController(_ pageViewController: UIPageViewController, viewControllerBefore viewController: UIViewController) -> UIViewController? {
-        guard let index = (viewController as? PageController)?.index, index > 0 || (index == 0 && config.hasPrevious) else { return nil }
-        return page(index - 1)
+        guard let page = viewController as? PageController, let layout = page.layout else { return nil }
+        if page.index > 0 { return self.page(page.index - 1, of: layout) }
+        guard layout === book, let previous = neighbour(forward: false) else { return nil }
+        return self.page(previous.pages.count - 1, of: previous)
     }
 
     func pageViewController(_ pageViewController: UIPageViewController, viewControllerAfter viewController: UIViewController) -> UIViewController? {
-        guard let index = (viewController as? PageController)?.index,
-              index + 1 < pages.count || (index + 1 == pages.count && config.hasNext) else { return nil }
-        return page(index + 1)
+        guard let page = viewController as? PageController, let layout = page.layout else { return nil }
+        if page.index + 1 < layout.pages.count { return self.page(page.index + 1, of: layout) }
+        guard layout === book, let next = neighbour(forward: true) else { return nil }
+        return self.page(0, of: next)
     }
 
     func pageViewController(_ pageViewController: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
@@ -346,16 +436,13 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
 
     func pageViewController(_ pageViewController: UIPageViewController, didFinishAnimating finished: Bool,
                             previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
-        guard completed, let index = (pageViewController.viewControllers?.first as? PageController)?.index else { return }
-        if index < 0 { config.onBoundary(false); return }
-        if index >= pages.count { config.onBoundary(true); return }
-        current = index
-        reportPosition()
+        guard completed, let page = pageViewController.viewControllers?.first as? PageController else { return }
+        arrive(at: page)
     }
 
     // MARK: Tapping
 
-    private var currentTextView: UITextView? { cache[current]?.textView }
+    private var currentTextView: UITextView? { book?.cache[current]?.textView }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         guard let text = currentTextView else { return false }
@@ -369,12 +456,13 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     }
 
     @objc private func tapped(_ gesture: UITapGestureRecognizer) {
-        guard gesture.state == .ended, let text = currentTextView, tapFilter.isQuickTap(in: text) else { return }
+        guard gesture.state == .ended, let book, let text = currentTextView, tapFilter.isQuickTap(in: text) else { return }
+        guard config.interactive else { config.onTapBlank(); return }
         let location = gesture.location(in: text)
         if text.bounds.contains(location),
-           let range = ReaderTextTools.wordRange(at: location, in: text, words: wordRanges),
+           let range = ReaderTextTools.wordRange(at: location, in: text, words: book.wordRanges),
            let selection = ReaderTextTools.selection(for: range, in: text) {
-            flash.show(range, in: storage)
+            flash.show(range, in: book.storage)
             config.onTapWord(selection)
             return
         }
@@ -413,18 +501,23 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     }
 }
 
-/// One page: backdrop, chapter title, the page's text and its number.
+/// One page: backdrop, chapter title, the page's text, chapter progress and page number.
 final class PageController: UIViewController {
     let index: Int
+    private(set) weak var layout: PagedChapter?
+    /// The storage owns the layout manager and containers the text view draws from.
+    private let storage: NSTextStorage
     let backdrop = BackdropView()
     let header = UILabel()
     let footer = UILabel()
-    let boundaryLabel = UILabel()
+    let progress = UILabel()
     var textView: UITextView?
     var textFrame: () -> CGRect = { .zero }
 
-    init(index: Int) {
+    init(index: Int, layout: PagedChapter) {
         self.index = index
+        self.layout = layout
+        storage = layout.storage
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -433,26 +526,24 @@ final class PageController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.addSubview(backdrop)
-        for label in [header, footer] {
+        for label in [header, footer, progress] {
             label.font = .systemFont(ofSize: 11)
             label.isAccessibilityElement = false
             view.addSubview(label)
         }
         footer.textAlignment = .right
         footer.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        boundaryLabel.font = .preferredFont(forTextStyle: .headline)
-        boundaryLabel.textAlignment = .center
-        view.addSubview(boundaryLabel)
+        progress.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         if let textView { view.addSubview(textView) }
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         backdrop.frame = view.bounds
-        boundaryLabel.frame = view.bounds
         let frame = textFrame()
         textView?.frame = frame
         header.frame = CGRect(x: frame.minX, y: frame.minY - 26, width: frame.width, height: 16)
         footer.frame = CGRect(x: frame.minX, y: frame.maxY + 10, width: frame.width, height: 16)
+        progress.frame = footer.frame
     }
 }

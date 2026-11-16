@@ -55,6 +55,10 @@ struct ReaderView: View {
         guard let content, content.chapters.indices.contains(chapter) else { return nil }
         return content.chapters[chapter]
     }
+    private func chapter(at index: Int) -> ReaderChapter? {
+        guard let content, content.chapters.indices.contains(index) else { return nil }
+        return content.chapters[index]
+    }
     private var chapterCount: Int { content?.chapters.count ?? book?.chapters.count ?? 0 }
     private var hasNext: Bool { chapter + 1 < chapterCount }
     private var colorScheme: ColorScheme? { appearance == "light" ? .light : appearance == "dark" ? .dark : nil }
@@ -78,25 +82,17 @@ struct ReaderView: View {
             // Chrome floats over the text instead of resizing it; the lookup card stays clear of the bars.
             .overlay {
                 Color.clear
+                    .safeAreaInset(edge: .top, spacing: 0) { if chromeVisible { topBar } }
                     .safeAreaInset(edge: .bottom, spacing: 0) { bottomInset }
                     .overlay(alignment: lookup?.isInLowerHalf == true ? .top : .bottom) { lookupOverlay }
-            }
-            .overlay(alignment: .top) {
-                if let toast { ToastLabel(text: toast).padding(.top, 8) }
+                    .overlay(alignment: .top) {
+                        if let toast { ToastLabel(text: toast).padding(.top, 8) }
+                    }
             }
             .animation(.default, value: toast)
             .animation(.spring(duration: 0.25), value: lookup?.id)
-            .navigationTitle(current?.title ?? book?.title ?? "")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(chrome, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbar(chromeVisible ? .visible : .hidden, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { close() } label: { Label("书架", systemImage: "chevron.left") }
-                        .accessibilityIdentifier("close-reader")
-                }
-            }
+            // Our own top bar: the system one slides in under the status bar and Dynamic Island.
+            .toolbar(.hidden, for: .navigationBar)
             .statusBarHidden(!chromeVisible)
         }
         .tint(.accent)
@@ -147,7 +143,8 @@ struct ReaderView: View {
             Color(uiColor: palette.paper).ignoresSafeArea()
             if let current {
                 surface(for: current)
-                    .id("\(current.id)|\(pageTurn.rawValue)")
+                    // The pager turns into neighbouring chapters itself, so only scrolling rebuilds per chapter.
+                    .id(pageTurn.isPaged ? pageTurn.rawValue : "\(current.id)|\(pageTurn.rawValue)")
                     .ignoresSafeArea()
             } else if let loadError {
                 ContentUnavailableView("无法打开这本书", systemImage: "exclamationmark.triangle", description: Text(loadError))
@@ -160,19 +157,26 @@ struct ReaderView: View {
     @ViewBuilder private func surface(for current: ReaderChapter) -> some View {
         if pageTurn.isPaged {
             PagedSurface(
-                chapter: current, layout: layout, palette: palette, backdrop: backdrop, backdropVersion: backdropVersion,
-                turn: pageTurn, initialOffset: offset, jump: jump, markedRanges: marks,
-                hasPrevious: chapter > 0, hasNext: hasNext,
+                chapter: current, chapterIndex: chapter, chapterCount: chapterCount,
+                previousChapter: chapter(at: chapter - 1), nextChapter: chapter(at: chapter + 1),
+                layout: layout, palette: palette, backdrop: backdrop, backdropVersion: backdropVersion,
+                turn: pageTurn, initialOffset: offset, jump: jump, learningForms: learningForms,
+                interactive: !chromeVisible,
                 edgeTapsTurnPages: lookup == nil && !chromeVisible,
                 autoTurnInterval: autoRunning ? Double(34 - 3 * autoSpeed) : nil,
                 onPosition: positionChanged,
                 onTapWord: { show($0) },
                 onTapBlank: { tappedBlank() },
-                onTurn: { lookup = nil },
+                onTurn: { lookup = nil; hideChrome() },
                 onLookup: { show($0) },
                 onSave: { save($0) },
+                onChapterTurn: { forward in
+                    // The surface already shows the new chapter; its position report follows.
+                    chapter += forward ? 1 : -1
+                    jump = nil
+                },
                 onBoundary: { forward in
-                    if forward { reachedChapterEnd() } else { go(to: chapter - 1, atEnd: true) }
+                    if forward { reachedChapterEnd() }
                 })
         } else {
             ZStack {
@@ -186,9 +190,29 @@ struct ReaderView: View {
                     onScroll: { lookup = nil },
                     onLookup: { show($0) },
                     onSave: { save($0) },
+                    interactive: !chromeVisible,
                     onReachEnd: { reachedChapterEnd() })
             }
         }
+    }
+
+    private var topBar: some View {
+        HStack(spacing: 12) {
+            Button { close() } label: {
+                Image(systemName: "chevron.left").font(.title3.weight(.semibold)).frame(width: 44, height: 44)
+            }
+            .glassEffect(.regular.interactive(), in: .circle)
+            .accessibilityLabel("书架")
+            .accessibilityIdentifier("close-reader")
+            Text(current?.title ?? book?.title ?? "")
+                .font(.headline).lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityAddTraits(.isHeader)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(chrome.ignoresSafeArea(edges: .top))
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     private var bottomInset: some View {
@@ -256,15 +280,15 @@ struct ReaderView: View {
     private var chapterBar: some View {
         let last = max(chapterCount - 1, 0)
         let shown = min(Int(sliderChapter ?? Double(chapter)), last)
+        let preview: String? = if sliderChapter != nil, let chapters = content?.chapters, chapters.indices.contains(shown) {
+            "\(chapters[shown].title) · \(shown + 1)/\(chapterCount)"
+        } else { nil }
         return VStack(spacing: 6) {
-            Group {
-                if sliderChapter != nil, let chapters = content?.chapters, chapters.indices.contains(shown) {
-                    Text("\(chapters[shown].title) · \(shown + 1)/\(chapterCount)")
-                } else {
-                    Text("第 \(chapter + 1)/\(max(chapterCount, 1)) 章 · 本章 \(Int(fraction * 100))%")
-                }
+            // Paged reading shows progress in each page's footer; the bar only previews a slider drag.
+            if !pageTurn.isPaged {
+                Text(preview ?? "第 \(chapter + 1)/\(max(chapterCount, 1)) 章 · 本章 \(Int(fraction * 100))%")
+                    .font(.caption2).monospacedDigit().foregroundStyle(.secondary).lineLimit(1)
             }
-            .font(.caption2).monospacedDigit().foregroundStyle(.secondary).lineLimit(1)
             HStack(spacing: 14) {
                 Button("上一章") { go(to: chapter - 1) }
                     .disabled(chapter == 0)
@@ -288,6 +312,16 @@ struct ReaderView: View {
         .padding(.horizontal, 20)
         .padding(.top, 12)
         .padding(.bottom, 4)
+        .overlay(alignment: .top) {
+            if pageTurn.isPaged, let preview {
+                Text(preview)
+                    .font(.subheadline.weight(.medium)).monospacedDigit().lineLimit(1)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(.regularMaterial, in: Capsule())
+                    .alignmentGuide(.top) { $0[.bottom] + 8 }
+                    .padding(.horizontal, 20)
+            }
+        }
     }
 
     private var autoReadingBar: some View {
@@ -457,6 +491,15 @@ struct ReaderView: View {
         }
     }
 
+    /// Turning a page puts the toolbars away instead of leaving them over the new page.
+    private func hideChrome() {
+        guard chromeVisible else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            chromeVisible = false
+            showPanel = false
+        }
+    }
+
     private func show(_ selection: ReadingSelection) {
         tipSeen = true
         lookup = selection
@@ -482,10 +525,7 @@ struct ReaderView: View {
         guard let current else { marks = []; return }
         let forms = learningForms
         guard !forms.isEmpty else { marks = []; return }
-        let text = current.text as NSString
-        marks = ReadingSurface.englishWordRanges(in: current.text).filter {
-            forms.contains(WordDictionary.normalize(text.substring(with: $0)))
-        }
+        marks = ReaderTextTools.markedRanges(in: current.text, words: ReadingSurface.englishWordRanges(in: current.text), forms: forms)
     }
 }
 
