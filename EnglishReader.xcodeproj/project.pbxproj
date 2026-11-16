@@ -6,8 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		C10000000000000000000001 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = C10000000000000000000002 /* ZIPFoundation */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
-		A1B2C3D40000000000000001 /* App proxy */ = {
+		A1B2C3D40000000000000001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 8238217991C4C82D1BCE751B /* Project object */;
 			proxyType = 1;
@@ -16,39 +20,34 @@
 		};
 /* End PBXContainerItemProxy section */
 
-/* Begin PBXBuildFile section */
-        C10000000000000000000001 = {isa = PBXBuildFile; productRef = C10000000000000000000002; };
-/* End PBXBuildFile section */
-/* Begin PBXFrameworksBuildPhase section */
-        C10000000000000000000003 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (C10000000000000000000001,); runOnlyForDeploymentPostprocessing = 0; };
-/* End PBXFrameworksBuildPhase section */
-/* Begin XCRemoteSwiftPackageReference section */
-        C10000000000000000000004 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/weichsel/ZIPFoundation.git"; requirement = {kind = exactVersion; version = 0.9.20; }; };
-/* End XCRemoteSwiftPackageReference section */
-/* Begin XCSwiftPackageProductDependency section */
-        C10000000000000000000002 = {isa = XCSwiftPackageProductDependency; package = C10000000000000000000004; productName = ZIPFoundation; };
-/* End XCSwiftPackageProductDependency section */
 /* Begin PBXFileReference section */
 		A1B2C3D40000000000000002 /* EnglishReaderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EnglishReaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		E1D1C645818EB0816572F68E /* EnglishReader.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = EnglishReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E1D1C645818EB0816572F68E /* EnglishReader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EnglishReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		32FA6C0B59B4A7B42DDCEA33 /* EnglishReader */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = EnglishReader;
+			sourceTree = "<group>";
+		};
 		A1B2C3D40000000000000003 /* EnglishReaderTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = EnglishReaderTests;
 			sourceTree = "<group>";
 		};
-		32FA6C0B59B4A7B42DDCEA33 /* EnglishReader */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			explicitFileTypes = {
-			};
-			explicitFolders = (
-			);
-			path = EnglishReader;
-			sourceTree = "<group>";
-		};
 /* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C10000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C10000000000000000000001 /* ZIPFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		4B2A5E79F7D5BFD1F7DCE292 = {
@@ -72,24 +71,12 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A1B2C3D40000000000000004 /* EnglishReaderTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = A1B2C3D40000000000000005;
-			buildPhases = (A1B2C3D40000000000000006 /* Sources */, C10000000000000000000005 /* Test Resources */,);
-			buildRules = ();
-			dependencies = (A1B2C3D40000000000000007 /* App dependency */,);
-			fileSystemSynchronizedGroups = (A1B2C3D40000000000000003 /* EnglishReaderTests */,);
-			name = EnglishReaderTests;
-			productName = EnglishReaderTests;
-			productReference = A1B2C3D40000000000000002 /* EnglishReaderTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
 		2E69B1330A3161295C9DCB01 /* EnglishReader */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 8C42E519CFA30563C7D495EB /* Build configuration list for PBXNativeTarget "EnglishReader" */;
 			buildPhases = (
 				485B7BB5562F3ABD154D4B35 /* Sources */,
- C10000000000000000000003,
+				C10000000000000000000003 /* Frameworks */,
 				64723A455F920BBCE48BF909 /* Resources */,
 			);
 			buildRules = (
@@ -100,10 +87,32 @@
 				32FA6C0B59B4A7B42DDCEA33 /* EnglishReader */,
 			);
 			name = EnglishReader;
-			packageProductDependencies = (C10000000000000000000002,);
+			packageProductDependencies = (
+				C10000000000000000000002 /* ZIPFoundation */,
+			);
 			productName = EnglishReader;
 			productReference = E1D1C645818EB0816572F68E /* EnglishReader.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A1B2C3D40000000000000004 /* EnglishReaderTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1B2C3D40000000000000005 /* Build configuration list for PBXNativeTarget "EnglishReaderTests" */;
+			buildPhases = (
+				A1B2C3D40000000000000006 /* Sources */,
+				C10000000000000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A1B2C3D40000000000000007 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A1B2C3D40000000000000003 /* EnglishReaderTests */,
+			);
+			name = EnglishReaderTests;
+			productName = EnglishReaderTests;
+			productReference = A1B2C3D40000000000000002 /* EnglishReaderTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -114,11 +123,11 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 2600;
 				TargetAttributes = {
-					A1B2C3D40000000000000004 = {
-						TestTargetID = 2E69B1330A3161295C9DCB01;
-					};
 					2E69B1330A3161295C9DCB01 = {
 						ProvisioningStyle = Automatic;
+					};
+					A1B2C3D40000000000000004 = {
+						TestTargetID = 2E69B1330A3161295C9DCB01;
 					};
 				};
 			};
@@ -131,8 +140,10 @@
 			);
 			mainGroup = 4B2A5E79F7D5BFD1F7DCE292;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (C10000000000000000000004,);
- preferredProjectObjectVersion = 77;
+			packageReferences = (
+				C10000000000000000000004 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+			);
+			preferredProjectObjectVersion = 77;
 			productRefGroup = A0906AD77C76E090572F0E63 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -144,8 +155,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-        C10000000000000000000005 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		64723A455F920BBCE48BF909 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C10000000000000000000005 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -155,13 +172,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A1B2C3D40000000000000006 /* Sources */ = {
+		485B7BB5562F3ABD154D4B35 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = ();
+			files = (
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		485B7BB5562F3ABD154D4B35 /* Sources */ = {
+		A1B2C3D40000000000000006 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -171,34 +189,14 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		A1B2C3D40000000000000007 /* App dependency */ = {
+		A1B2C3D40000000000000007 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 2E69B1330A3161295C9DCB01 /* EnglishReader */;
-			targetProxy = A1B2C3D40000000000000001 /* App proxy */;
+			targetProxy = A1B2C3D40000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		A1B2C3D40000000000000008 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				PRODUCT_BUNDLE_IDENTIFIER = com.inp146.reader-m7k2.tests;
-				TARGETED_DEVICE_FAMILY = 1;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EnglishReader.app/EnglishReader";
-			};
-			name = Debug;
-		};
-		A1B2C3D40000000000000009 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				PRODUCT_BUNDLE_IDENTIFIER = com.inp146.reader-m7k2.tests;
-				TARGETED_DEVICE_FAMILY = 1;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EnglishReader.app/EnglishReader";
-			};
-			name = Release;
-		};
 		19E964B74B00A4CB2EF3C8A9 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -269,7 +267,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				INFOPLIST_KEY_CFBundleDisplayName = "英文阅读器";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -280,7 +278,7 @@
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.inp146.reader-m7k2;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.reader-m7k2";
 				PRODUCT_NAME = EnglishReader;
 				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -345,6 +343,26 @@
 			};
 			name = Release;
 		};
+		A1B2C3D40000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.reader-m7k2.tests";
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EnglishReader.app/EnglishReader";
+			};
+			name = Debug;
+		};
+		A1B2C3D40000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.reader-m7k2.tests";
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EnglishReader.app/EnglishReader";
+			};
+			name = Release;
+		};
 		E4D305C9168016FE6F18420B /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -362,7 +380,7 @@
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.inp146.reader-m7k2;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.reader-m7k2";
 				PRODUCT_NAME = EnglishReader;
 				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -373,15 +391,6 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A1B2C3D40000000000000005 /* Build configuration list for PBXNativeTarget "EnglishReaderTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				A1B2C3D40000000000000008 /* Debug */,
-				A1B2C3D40000000000000009 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
-		};
 		5075F2191BCB6FFD9AB675B1 /* Build configuration list for PBXProject "EnglishReader" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -400,7 +409,35 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
+		A1B2C3D40000000000000005 /* Build configuration list for PBXNativeTarget "EnglishReaderTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D40000000000000008 /* Debug */,
+				A1B2C3D40000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		C10000000000000000000004 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.9.20;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C10000000000000000000002 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C10000000000000000000004 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 8238217991C4C82D1BCE751B /* Project object */;
 }

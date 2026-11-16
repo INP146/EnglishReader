@@ -26,7 +26,7 @@ xcodebuild -project EnglishReader.xcodeproj -scheme EnglishReader \
 xcodebuild -project EnglishReader.xcodeproj -scheme EnglishReader \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 ```
-真机构建需在 Xcode 中为 target 设置 Development Team（项目未写死 Team）。Bundle ID：`com.inp146.reader-m7k2`。
+真机构建需在 Xcode 中为 target 设置 Development Team（项目未写死 Team）；没有开发者账号时，用外部工具 `iosign install`（`~/Projects/iosign`）以第三方证书重签安装。Bundle ID：`com.inp146.reader-m7k2`。
 
 ## 约定
 - 界面文案为中文，放在 `Localizable.xcstrings`。
