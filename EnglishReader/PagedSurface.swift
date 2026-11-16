@@ -224,13 +224,27 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
 
     private var safeInsets: UIEdgeInsets { view.window?.safeAreaInsets ?? view.safeAreaInsets }
 
+    /// Blank space under the footer labels.
+    private var footerBottomSpace: CGFloat { (max(safeInsets.bottom, 12) + 4) * 0.75 }
+
+    /// Text keeps at least one line of 20 pt body text clear above the footer.
+    private var footerGap: CGFloat {
+        ReaderTypography.font(config.layout.typeface, size: 20).lineHeight * CGFloat(config.layout.lineSpacing)
+    }
+
     /// Where text sits on every page; the header and footer use the bands outside it.
     fileprivate var textFrame: CGRect {
         let insets = safeInsets
         let margin = CGFloat(config.layout.margin)
         return CGRect(x: insets.left + margin, y: insets.top + 34,
                       width: max(1, view.bounds.width - insets.left - insets.right - margin * 2),
-                      height: max(1, view.bounds.height - insets.top - 34 - max(insets.bottom, 12) - 30))
+                      height: max(1, view.bounds.height - insets.top - 34 - footerBottomSpace - 16 - footerGap))
+    }
+
+    /// The page number and chapter progress, pinned above the bottom blank.
+    fileprivate var footerFrame: CGRect {
+        let text = textFrame
+        return CGRect(x: text.minX, y: view.bounds.height - footerBottomSpace - 16, width: text.width, height: 16)
     }
 
     private func renderKey(for chapterID: String) -> RenderKey {
@@ -281,6 +295,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         if let page = layout.cache[index] { return page }
         let page = PageController(index: index, layout: layout)
         page.textFrame = { [weak self] in self?.textFrame ?? .zero }
+        page.footerFrame = { [weak self] in self?.footerFrame ?? .zero }
         page.backdrop.palette = config.palette
         page.backdrop.backdrop = config.backdrop
         let secondary = config.palette.secondaryInk
@@ -524,6 +539,7 @@ final class PageController: UIViewController {
     let progress = UILabel()
     var textView: UITextView?
     var textFrame: () -> CGRect = { .zero }
+    var footerFrame: () -> CGRect = { .zero }
 
     init(index: Int, layout: PagedChapter) {
         self.index = index
@@ -554,7 +570,7 @@ final class PageController: UIViewController {
         let frame = textFrame()
         textView?.frame = frame
         header.frame = CGRect(x: frame.minX, y: frame.minY - 26, width: frame.width, height: 16)
-        footer.frame = CGRect(x: frame.minX, y: frame.maxY + 10, width: frame.width, height: 16)
+        footer.frame = footerFrame()
         progress.frame = footer.frame
     }
 }
