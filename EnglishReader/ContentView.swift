@@ -49,6 +49,7 @@ struct LibraryView: View {
     @State private var exportTask: Task<Void, Never>?
     @State private var exportingName: String?
     @State private var exported: ExportedFile?
+    @State private var gridWidth: CGFloat = 0
 
     /// Started, unfinished books, the one read most recently first.
     private var reading: [ReaderBook] {
@@ -114,31 +115,28 @@ struct LibraryView: View {
 
     /// Like Apple Books' "Continue": large covers in a horizontal row, progress underneath.
     private var continueShelf: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("继续阅读").font(.title2.bold()).padding(.horizontal, 20)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .bottom, spacing: 18) {
-                    ForEach(reading) { book in
-                        VStack(alignment: .leading, spacing: 8) {
-                            coverButton(book).frame(height: 210)
-                            ProgressView(value: book.progress).tint(.accent)
-                            HStack {
-                                Text("\(book.percentRead)%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                                Spacer(minLength: 0)
-                                bookMenu(book)
-                            }
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(alignment: .bottom, spacing: 18) {
+                ForEach(reading) { book in
+                    VStack(alignment: .leading, spacing: 8) {
+                        coverButton(book).frame(height: 210)
+                        ProgressView(value: book.progress).tint(.accent)
+                        HStack {
+                            Text("\(book.percentRead)%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                            bookMenu(book)
                         }
-                        .frame(width: 210 * book.coverAspect)
                     }
+                    .frame(width: 210 * book.coverAspect)
                 }
-                .scrollTargetLayout()
             }
-            .contentMargins(.horizontal, 20, for: .scrollContent)
-            .scrollTargetBehavior(.viewAligned)
+            .scrollTargetLayout()
         }
+        .contentMargins(.horizontal, 20, for: .scrollContent)
+        .scrollTargetBehavior(.viewAligned)
     }
 
-    /// Like Apple Books' library: covers of their own proportions sitting on a common baseline.
+    /// Covers keep their own proportions at full column width; each column stacks independently and lazily.
     private var grid: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
@@ -146,24 +144,51 @@ struct LibraryView: View {
                 Spacer()
                 Text("\(store.books.count) 本").font(.subheadline).foregroundStyle(.secondary)
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 22, alignment: .bottom)],
-                      alignment: .leading, spacing: 26) {
-                ForEach(store.books) { book in
-                    VStack(alignment: .leading, spacing: 6) {
-                        coverButton(book)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                            .aspectRatio(2 / 3, contentMode: .fit)
-                        HStack {
-                            status(book)
-                            Spacer(minLength: 0)
-                            bookMenu(book)
-                        }
+            HStack(alignment: .top, spacing: Self.columnSpacing) {
+                ForEach(Array(columns.enumerated()), id: \.offset) { _, books in
+                    LazyVStack(alignment: .leading, spacing: Self.rowSpacing) {
+                        ForEach(books) { gridItem($0) }
                     }
-                    .accessibilityIdentifier("book-\(book.id.uuidString)")
+                    .frame(maxWidth: .infinity, alignment: .top)
                 }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
         }
         .padding(.horizontal, 20)
+    }
+
+    private static let columnSpacing: CGFloat = 22
+    private static let rowSpacing: CGFloat = 26
+    /// The row under each cover (reading status + "⋯" menu) plus the 6pt gap above it.
+    /// Its 28pt height is set by `bookMenu`'s tap target; keep the two in sync, or the columns balance less evenly.
+    private static let footerHeight: CGFloat = 6 + 28
+
+    /// Each book goes under the currently shortest column, so a book never sits higher than the one before it
+    /// and any sort order reads top to bottom. Heights come from the stored cover proportions, so covers
+    /// don't have to be loaded to lay the shelf out.
+    private var columns: [[ReaderBook]] {
+        let count = max(1, Int((gridWidth + Self.columnSpacing) / (140 + Self.columnSpacing)))
+        let width = max(1, (gridWidth - Self.columnSpacing * CGFloat(count - 1)) / CGFloat(count))
+        var columns = [[ReaderBook]](repeating: [], count: count)
+        var heights = [CGFloat](repeating: 0, count: count)
+        for book in store.books {
+            let column = heights.indices.min { heights[$0] < heights[$1] }!
+            columns[column].append(book)
+            heights[column] += width / book.coverAspect + Self.footerHeight + Self.rowSpacing
+        }
+        return columns
+    }
+
+    private func gridItem(_ book: ReaderBook) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            coverButton(book)
+            HStack {
+                status(book)
+                Spacer(minLength: 0)
+                bookMenu(book)
+            }
+        }
+        .accessibilityIdentifier("book-\(book.id.uuidString)")
     }
 
     private func coverButton(_ book: ReaderBook) -> some View {
@@ -202,7 +227,7 @@ struct LibraryView: View {
                 .tint(.red)
         } label: {
             Image(systemName: "ellipsis").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                .frame(width: 32, height: 28).contentShape(Rectangle())
+                .frame(width: 32, height: 28).contentShape(Rectangle()) // Height is mirrored in `footerHeight`.
         }
         .accessibilityLabel("更多操作")
     }
