@@ -11,6 +11,9 @@ struct SettingsView: View {
                     NavigationLink { ReaderPreferencesView() } label: {
                         SettingsIconLabel("阅读器设置", systemImage: "book.pages.fill", color: .orange)
                     }
+                    NavigationLink { DictionarySettingsView() } label: {
+                        SettingsIconLabel("词典", systemImage: "character.book.closed.fill", color: .blue)
+                    }
                 }
                 Section {
                     NavigationLink { AboutView() } label: {
@@ -214,6 +217,121 @@ private struct ReaderThemeSwatch: View {
     }
 }
 
+// MARK: Dictionary
+
+struct DictionarySettingsView: View {
+    @AppStorage("dictionaryExpandByDefault") private var expandByDefault = false
+    @AppStorage("dictionaryAccent") private var accent = "en-US"
+    private let downloads = DictionaryDownloads.shared
+
+    var body: some View {
+        Form {
+            Section {
+                if let core = downloads.dictionary.packs.first {
+                    packLabel(core.title, entries: core.entryCount, detail: String(localized: "内置"))
+                }
+            } header: { Text("已内置") } footer: {
+                Text("常用词、它们的变形和通用短语（含短语动词），不联网也能用。")
+            }
+            if downloads.packs.isEmpty {
+                Section {
+                    if downloads.isRefreshing {
+                        HStack { Text("正在获取词典列表…").foregroundStyle(.secondary); Spacer(); ProgressView() }
+                    } else if let error = downloads.catalogError {
+                        Text(error).foregroundStyle(.secondary)
+                        Button("重试") { Task { await downloads.refresh() } }
+                    }
+                }
+            } else {
+                group("vocabulary", title: "词汇", footer: "其余的普通单词和短语，多为生僻词。")
+                group("field", title: "学科",
+                      footer: "只收全部义项都属于该学科的词条；常用词即使带学科义项，也已在核心词典里。")
+                group("names", title: "专有名词", footer: "人名、地名、机构名和生物学名。")
+            }
+            Section("单词卡") {
+                Toggle("默认展开", isOn: $expandByDefault)
+                Picker("朗读口音", selection: $accent) {
+                    Text("美音").tag("en-US")
+                    Text("英音").tag("en-GB")
+                }
+            }
+            Section {
+            } footer: {
+                Text("词典数据来自 ECDICT（MIT 许可），各词典包可以任意组合。只有打开此页或下载词典时才会联网。")
+            }
+        }
+        .navigationTitle("词典")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await downloads.refresh() }
+        .refreshable { await downloads.refresh() }
+    }
+
+    @ViewBuilder
+    private func group(_ group: String, title: LocalizedStringKey, footer: LocalizedStringKey) -> some View {
+        let packs = downloads.packs.filter { $0.group == group }
+        if !packs.isEmpty {
+            Section {
+                ForEach(packs) { pack in row(pack) }
+            } header: { Text(title) } footer: { Text(footer) }
+        }
+    }
+
+    private func row(_ pack: DictionaryCatalog.Pack) -> some View {
+        let status = downloads.status(of: pack)
+        let installed = status == .installed || status == .updateAvailable
+        return HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                packLabel(pack.title, entries: pack.entries,
+                          detail: ByteCountFormatter.string(fromByteCount: installed ? pack.installedSize : pack.size, countStyle: .file))
+                if case .failed(let message) = status {
+                    Text(message).font(.caption).foregroundStyle(.red)
+                }
+            }
+            Spacer()
+            switch status {
+            case .notInstalled, .failed:
+                Button(status == .notInstalled ? "下载" : "重试") { Task { await downloads.download(pack) } }
+                    .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.small)
+            case .updateAvailable:
+                Button("更新") { Task { await downloads.download(pack) } }
+                    .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.small)
+            case .downloading(let fraction):
+                Text("\(Int(fraction * 100))%").monospacedDigit().foregroundStyle(.secondary)
+                Button { downloads.cancel(pack) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("取消下载")
+            case .installing:
+                ProgressView()
+            case .installed:
+                Text("已安装").foregroundStyle(.secondary)
+            }
+        }
+        .swipeActions {
+            if installed {
+                Button("删除", role: .destructive) { downloads.remove(pack) }
+            }
+        }
+        .contextMenu {
+            if installed {
+                Button("删除", systemImage: "trash", role: .destructive) { downloads.remove(pack) }
+            }
+        }
+    }
+
+    private func packLabel(_ title: String, entries: Int, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+            Text(verbatim: "\(Self.count(entries)) · \(detail)").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// "23.1 万条", "8,412 条".
+    static func count(_ entries: Int) -> String {
+        entries >= 10_000 ? String(localized: "\(Double(entries) / 10_000, format: .number.precision(.fractionLength(1))) 万条")
+            : String(localized: "\(entries) 条")
+    }
+}
+
 // MARK: About
 
 struct AboutView: View {
@@ -245,6 +363,7 @@ struct AboutView: View {
             }
             Section {
                 Text("书籍、阅读位置和生词都只保存在这台设备上，不会上传。删除应用会一并删除。")
+                Text("只有在打开“词典”设置或下载词典时才会联网。")
             } header: { Text("数据") }
             Section {
                 Text("释义来自离线英汉词典 ECDICT（MIT 许可）。")

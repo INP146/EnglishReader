@@ -1,0 +1,57 @@
+name: Publish dictionaries
+
+on:
+  push:
+    tags:
+      - "dict-[0-9]*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-dictionaries-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release
+    uses: ./.github/workflows/validate-dictionaries.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+
+  release:
+    name: Build packs and create GitHub Release
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.9"
+
+      - name: Build packs from the pinned ECDICT
+        # Fails when the rebuilt core differs from the one bundled in the app.
+        run: python Tools/dictionary_release.py build --verify-core
+
+      - name: Create release with packs, manifest and checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release already exists; keeping its notes and assets."
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "词典包 $GITHUB_REF_NAME" \
+              --notes-file "docs/releases/$GITHUB_REF_NAME.md" \
+              --latest=false \
+              build/dict/*.zip build/dict/manifest.json build/dict/SHA256SUMS
+          fi

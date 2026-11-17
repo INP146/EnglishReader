@@ -50,14 +50,15 @@ struct DictionaryEntry: Equatable, Sendable {
 /// overlap except for entries in two field packs, so lookups take the first pack that has a word.
 @MainActor
 final class DictionaryPack {
-    static let schema = 2
+    nonisolated static let schema = 2
 
     let url: URL
     let id: String
     let title: String
     let order: Int
     let entryCount: Int
-    let sourceDate: String
+    /// The dictionary release the pack was built for, e.g. "2026.11.18".
+    let version: String
     private var database: OpaquePointer?
 
     init?(url: URL) {
@@ -66,8 +67,7 @@ final class DictionaryPack {
             return nil
         }
         self.url = url
-        var meta: [String: String] = [:]
-        Self.rows("SELECT key, value FROM meta", in: database, columns: 2) { meta[$0[0]] = $0[1] }
+        let meta = Self.meta(of: database)
         guard meta["schema"] == String(Self.schema), let id = meta["id"] else {
             sqlite3_close(database)
             return nil
@@ -76,7 +76,22 @@ final class DictionaryPack {
         title = meta["title"] ?? id
         order = Int(meta["order"] ?? "") ?? 100
         entryCount = Int(meta["entries"] ?? "") ?? 0
-        sourceDate = meta["sourceDate"] ?? ""
+        version = meta["version"] ?? ""
+    }
+
+    /// The pack's metadata, or nil when the file isn't a readable pack.
+    nonisolated static func meta(at url: URL) -> [String: String]? {
+        var database: OpaquePointer?
+        defer { sqlite3_close(database) }
+        guard sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return nil }
+        let meta = meta(of: database)
+        return meta.isEmpty ? nil : meta
+    }
+
+    nonisolated private static func meta(of database: OpaquePointer?) -> [String: String] {
+        var meta: [String: String] = [:]
+        rows("SELECT key, value FROM meta", in: database, columns: 2) { meta[$0[0]] = $0[1] }
+        return meta
     }
 
     func close() {
@@ -119,7 +134,7 @@ final class DictionaryPack {
             collins: Int(values[6]) ?? 0, oxford: Int(values[7]) ?? 0, rank: Int(values[8]) ?? 0, forms: values[9])
     }
 
-    private static func rows(_ sql: String, _ arguments: [String] = [], in database: OpaquePointer?, columns: Int32,
+    nonisolated private static func rows(_ sql: String, _ arguments: [String] = [], in database: OpaquePointer?, columns: Int32,
                              _ body: ([String]) -> Void) {
         var statement: OpaquePointer?
         guard database != nil, sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else { return }
@@ -149,7 +164,8 @@ final class WordDictionary {
         .appendingPathComponent("Dictionaries", isDirectory: true)
 
     private let core: DictionaryPack?
-    private let directory: URL?
+    /// Where this dictionary looks for downloaded packs.
+    let directory: URL?
     /// Core first, then downloaded packs in their catalog order.
     private(set) var packs: [DictionaryPack] = []
 

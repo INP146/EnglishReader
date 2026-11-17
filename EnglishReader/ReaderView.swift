@@ -664,9 +664,15 @@ struct LookupCard: View {
                     .frame(maxHeight: isExpanded ? 340 : 160)
                     .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text(selection.text.contains(" ") ? "离线词典里没有这个词组。"
-                         : isLikelyName ? "离线词典里没有这个词，它可能是人名或地名。" : "离线词典里没有这个词。")
-                        .font(.callout).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(selection.text.contains(" ") ? "离线词典里没有这个词组。"
+                             : isLikelyName ? "离线词典里没有这个词，它可能是人名或地名。" : "离线词典里没有这个词。")
+                            .font(.callout)
+                        if DictionaryDownloads.shared.hasMoreToDownload {
+                            Text("可在“设置 › 词典”下载更多词库。").font(.caption)
+                        }
+                    }
+                    .foregroundStyle(.secondary)
                 }
             }
             .foregroundStyle(Color(uiColor: palette.ink))

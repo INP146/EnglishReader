@@ -20,9 +20,9 @@ The sample is bundled in the application; importing and reading do not make netw
 
 ## Offline English–Chinese dictionary
 
-`EnglishReader/Resources/dictionary-core.sqlite` (the core pack) is built from **ECDICT** by Linwei (skywind3000): https://github.com/skywind3000/ECDICT (`ecdict.csv`, downloaded 2026-11-17).
+`EnglishReader/Resources/dictionary-core.sqlite` (the core pack) is built from **ECDICT** by Linwei (skywind3000): https://github.com/skywind3000/ECDICT (`ecdict.csv` at commit `9c46923fb81a2eb6c264a3a1689562ea7bc56b6a`; the URL and sha256 are pinned in `Dictionaries/release.json`).
 
-`Tools/build-dictionary.py` splits ECDICT into packs that combine as a union: the bundled core (common single words — exam-tagged, Collins/Oxford-marked, or within the top 60,000 by BNC/frequency rank — their inflections, and general phrases made of common words), plus downloadable packs for the remaining general vocabulary, eight subject fields (by ECDICT's “[医]”-style labels) and names. Each entry keeps its full Chinese translation, English definition, exam tags, Collins stars, Oxford 3000 mark and inflections; the core also carries the inflection-to-base-word table. The app reads packs locally; the core never needs the network. The license is credited in the app's 设置 › 关于.
+`Tools/build-dictionary.py` splits ECDICT into packs that combine as a union: the bundled core (common single words — exam-tagged, Collins/Oxford-marked, or within the top 60,000 by BNC/frequency rank — their inflections, and general phrases made of common words), plus downloadable packs for the remaining general vocabulary, eight subject fields (by ECDICT's “[医]”-style labels) and names. Each entry keeps its full Chinese translation, English definition, exam tags, Collins stars, Oxford 3000 mark and inflections; the core also carries the inflection-to-base-word table. The app reads packs locally; the core never needs the network. The other packs are published as release assets of this repository and listed in `Dictionaries/manifest.json`; the app fetches that list and downloads a pack only from Settings › 词典. The license is credited in the app's 设置 › 关于.
 
 ECDICT license:
 

@@ -10,3 +10,6 @@ xcuserdata/
 # 本地签名材料（证书、私钥、描述文件）
 .signing/
 .local
+
+# Python 字节码（Tools/ 脚本与测试）
+__pycache__/

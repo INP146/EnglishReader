@@ -57,7 +57,7 @@ ECDICT 另有 340 万条的完整版（压缩后 216 MB），多出来的主要�
 每个包是一个 SQLite 文件 `dictionary-<id>.sqlite`：
 
 ```sql
-meta(key TEXT PRIMARY KEY, value TEXT)   -- schema, id, title, order, source, sourceDate, entries
+meta(key TEXT PRIMARY KEY, value TEXT)   -- schema, id, title, group, order, version, source, sourceCommit, entries
 entry(key TEXT PRIMARY KEY,              -- 规范化后的小写形式，与 WordDictionary.normalize 一致
       word, phonetic,
       translation,                       -- 全部中文义项，一行一组；含 “[网络]” 和学科义项
@@ -93,8 +93,8 @@ form(form TEXT PRIMARY KEY, lemma TEXT)  -- 仅 core：变形 → 原形
 
 ## 下载（第 2 步）
 
-- **托管**：词典包压缩成 zip，作为 GitHub Releases 资源，发布在本仓库（INP146/EnglishReader，公开）的 `dict-<sourceDate>` 标签下。App Store 托管的 On-Demand Resources 和 Background Assets 不适用：app 目前是重签安装，不经过 App Store。
-- **清单**：`Dictionaries/manifest.json` 放在仓库里，app 从 `raw.githubusercontent.com/INP146/EnglishReader/main/Dictionaries/manifest.json` 读取。每个包写明 id、名称、分组、顺序、schema、版本（sourceDate）、条目数、zip 大小、解压后大小、sha256、下载地址。打包工具生成 zip 和清单，再用 `gh release create` 发布资源、提交清单。
+- **托管**：词典包压缩成 zip，作为 GitHub Releases 资源，发布在本仓库（INP146/EnglishReader，公开）的 `dict-<版本>` 标签下，见下面的发布流程。App Store 托管的 On-Demand Resources 和 Background Assets 不适用：app 目前是重签安装，不经过 App Store。
+- **清单**：`Dictionaries/manifest.json` 放在仓库里，app 从 `raw.githubusercontent.com/INP146/EnglishReader/main/Dictionaries/manifest.json` 读取。清单写明格式（`format: 1`）和版本（`release`），每个包写明 id、名称、分组、顺序、schema、版本、条目数、zip 大小、解压后大小、sha256、下载地址。
 - **下载与安装**：
   - 下载用 `URLSession` 的下载任务，失败时保留续传数据（resume data）。最大的包压缩后约 9 MB，所以不用后台会话（background session）。
   - 下完先校验 sha256，再用 ZIPFoundation 解压到临时目录。
@@ -102,6 +102,7 @@ form(form TEXT PRIMARY KEY, lemma TEXT)  -- 仅 core：变形 → 原形
   - 最后调用 `WordDictionary.reload()`。
 - **更新与删除**：清单里的版本比已装的新，就显示“更新”；删除时先关闭数据库再删文件，然后重新加载。
 - **隐私说明**：书和生词从不上传；只有在用户主动打开词典设置或下载词典时才联网。“关于”页和 SOURCE.md 同步改写。
+- **测试**：单元测试用本地 `file://` 清单和 zip 走完下载、校验、安装、更新、删除；启动参数 `-dictionaryManifestURL` 可让 app 改用本地 HTTP 服务器上的清单。
 
 ### 设置 › 词典
 
@@ -116,6 +117,49 @@ form(form TEXT PRIMARY KEY, lemma TEXT)  -- 仅 core：变形 → 原形
 
 查不到词时，单词卡提示“可在 设置 › 词典 下载更多词库”。
 
+### 发布流程
+
+参照 ArchiveX 的自动发布：本地脚本准备与校验，推送 tag 后由 GitHub Actions 构建并创建 Release；脚本从不提交、打 tag 或推送。
+
+**版本**：`2026.11.18`，同一天再发布一次用 `2026.11.18.1`。tag 为 `dict-<版本>`。每个包的 `meta.version` 和清单都记录版本；app 按数字逐段比较，清单里的版本更新时显示“更新”。
+
+**数据源固定**：`Dictionaries/release.json` 记录当前版本，以及 ECDICT 的提交号、`ecdict.csv` 的下载地址和 sha256。构建只用这份固定的数据，下载后先核对 sha256，所以任何时候都能重建出同一批包。
+
+**Tools/dictionary_release.py**（只用标准库，兼容 macOS 自带的 Python 3.9）：
+
+| 命令 | 作用 |
+|---|---|
+| `prepare <版本> [--source-commit <ECDICT 提交>]` | 版本必须比当前新。构建全部包，更新 app 内置的核心词典和 `release.json`，生成发布说明草稿 `docs/releases/dict-<版本>.md`。`--dry-run` 只列出将修改的文件。 |
+| `check [tag] [--require-notes]` | 核对 `release.json`、内置核心词典的 meta、发布说明（不得含 `RELEASE_TODO`）、`manifest.json`。 |
+| `build [--verify-core]` | 按 `release.json` 构建全部包到 `build/dict`，打成 zip，生成 `manifest.json` 和 `SHA256SUMS`。zip 的时间戳和权限固定，同一环境构建两次逐字节一致。`--verify-core` 用表内容哈希比对构建出的核心词典和 app 内置的，不受 SQLite 版本影响。 |
+| `adopt <版本>` | 下载已发布 Release 的 `manifest.json` 和 `SHA256SUMS`，核对哈希，确认每个包都能下载，再写入 `Dictionaries/manifest.json`。 |
+
+**Actions**：
+
+- `validate-dictionaries.yml`：在 PR 和推送 main 时运行，也由发布流程调用。运行 `check` 和 `Tools/tests` 里的脚本测试；发布时还要求发布说明已完成，且 tag 与 `release.json` 一致。
+- `publish-dictionaries.yml`：推送 `dict-*` tag 时运行。先校验，再 `build --verify-core`，然后用发布说明创建 Release，附上各包 zip、`manifest.json` 和 `SHA256SUMS`。Release 带 `--latest=false`，不占用仓库的 Latest Release，留给以后的 app 发布。已存在的 Release 不覆盖。
+
+**日常发版**：
+
+```sh
+python3 Tools/dictionary_release.py prepare 2026.12.01 --dry-run
+python3 Tools/dictionary_release.py prepare 2026.12.01        # 换数据源时加 --source-commit <40 位提交号>
+# 填写并审阅 docs/releases/dict-2026.12.01.md，删除全部 RELEASE_TODO
+python3 Tools/dictionary_release.py check --require-notes
+# 跑 app 的单元测试和选词 UI 测试（核心词典变了）
+git add -A && git commit
+git push origin main
+git tag -a dict-2026.12.01 -m "词典包 dict-2026.12.01"
+git push origin dict-2026.12.01
+# Actions 成功后：
+python3 Tools/dictionary_release.py adopt 2026.12.01
+git add Dictionaries/manifest.json && git commit && git push origin main
+```
+
+清单最后由人来提交：Release 的资源都确认能下载之后，app 才会看到新包。只改 app 而不改词典时，不需要走这个流程。
+
+**失败与重跑**：校验或构建失败时不会创建 Release，修好后用下一个版本号重新发布，不移动已推送的 tag。Release 创建后发现问题，同样发下一个版本，再 `adopt`。
+
 ## 以后
 
 1. 网络词典接口、LLM 语境释义（iOS 26 FoundationModels，本机生成），作为展开区的异步区块。
@@ -125,5 +169,7 @@ form(form TEXT PRIMARY KEY, lemma TEXT)  -- 仅 core：变形 → 原形
 ## 进度
 
 - [x] 第 1 步：分包脚本与 schema 2、内置核心包、变形还原层、并集查词、单词卡收起/展开（2026-11-17）
-- [ ] 第 2 步：打包与清单工具、下载管理、设置 › 词典、发布第一批词典包（发布前先向用户确认）
+- [x] 第 2 步：打包与清单工具、下载管理、设置 › 词典（2026-11-17）
+- [x] 发布流程：`Tools/dictionary_release.py`、Actions 工作流、ECDICT 固定到 `9c46923`（2026-11-18）
+- [ ] 发布 `dict-2026.11.18`
 - [ ] 以后：网络词典与 LLM、水平设置、自定义导入

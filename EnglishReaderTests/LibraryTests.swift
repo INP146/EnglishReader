@@ -1,5 +1,4 @@
 import Foundation
-import SQLite3
 import Testing
 import UIKit
 @testable import EnglishReader
@@ -207,8 +206,11 @@ struct LibraryTests {
 
 @Suite("Offline dictionary") @MainActor
 struct DictionaryTests {
+    /// The bundled core alone, whatever packs the simulator has downloaded.
+    let coreOnly = WordDictionary(directory: nil)
+
     @Test func lookupsResolveInflectionsAndContractions() throws {
-        let dictionary = WordDictionary.shared
+        let dictionary = coreOnly
         #expect(dictionary.isAvailable)
         let peeped = try #require(dictionary.lookup("peeped"))
         #expect(peeped.headword == "peep" && peeped.inflectedFrom == "peeped")
@@ -223,7 +225,7 @@ struct DictionaryTests {
     }
 
     @Test func coreCarriesPhrasesAndTheirInflections() throws {
-        let dictionary = WordDictionary.shared
+        let dictionary = coreOnly
         #expect(dictionary.lookup("give up")?.definition.contains("放弃") == true)
         let gaveUp = try #require(dictionary.lookup("Gave  up"))
         #expect(gaveUp.headword == "give up" && gaveUp.inflectedFrom == "gave up")
@@ -235,7 +237,7 @@ struct DictionaryTests {
     }
 
     @Test func entriesCarryTheExpandedFields() throws {
-        let dictionary = WordDictionary.shared
+        let dictionary = coreOnly
         let go = try #require(dictionary.lookup("go"))
         #expect(go.forms.contains { $0.kind == "p" && $0.word == "went" })
         #expect(go.collins == 5 && go.isOxford3000 && go.tags.contains("gk"))
@@ -252,7 +254,7 @@ struct DictionaryTests {
     }
 
     @Test func formsWithMeaningsOfTheirOwnKeepThem() throws {
-        let dictionary = WordDictionary.shared
+        let dictionary = coreOnly
         let found = try #require(dictionary.lookup("found"))
         #expect(found.headword == "find" && found.inflectedFrom == "found")
         #expect(found.ownSense?.contains("建立") == true && found.ownSense?.contains("find") == false)
@@ -286,24 +288,6 @@ struct DictionaryTests {
         #expect(union.phrases(startingWith: "abdicate").map(\.headword) == ["abdicate the throne"])
     }
 
-    private func makePack(at url: URL, id: String, order: Int, entries: [(String, String)],
-                          forms: [(String, String)] = [], schema: Int = DictionaryPack.schema) throws {
-        var database: OpaquePointer?
-        guard sqlite3_open(url.path, &database) == SQLITE_OK else { throw CocoaError(.fileWriteUnknown) }
-        defer { sqlite3_close(database) }
-        var sql = """
-            CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
-            CREATE TABLE entry(key TEXT PRIMARY KEY, word TEXT, phonetic TEXT, translation TEXT, definition TEXT, tags TEXT,
-                               collins INTEGER, oxford INTEGER, rank INTEGER, forms TEXT);
-            CREATE TABLE form(form TEXT PRIMARY KEY, lemma TEXT);
-            INSERT INTO meta VALUES ('schema', '\(schema)'), ('id', '\(id)'), ('title', '\(id)'), ('order', '\(order)');
-            """
-        for (word, translation) in entries {
-            sql += "INSERT INTO entry VALUES ('\(word)', '\(word)', '', '\(translation)', '', '', 0, 0, 10000000, '');"
-        }
-        for (form, lemma) in forms { sql += "INSERT INTO form VALUES ('\(form)', '\(lemma)');" }
-        guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else { throw CocoaError(.fileWriteUnknown) }
-    }
 }
 
 @Suite("Bounded EPUB and TXT importer")

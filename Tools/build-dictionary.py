@@ -1,5 +1,7 @@
 # Builds the dictionary packs from ECDICT (https://github.com/skywind3000/ECDICT).
 # Usage: python3 -I Tools/build-dictionary.py path/to/ecdict.csv OUT_DIR [pack ...]
+# The version and source written into each pack come from Dictionaries/release.json.
+# Releases go through Tools/dictionary_release.py; see docs/dictionary-design.md.
 #
 # Every ECDICT entry goes to exactly one pack, so packs combine as a union:
 #   core         common words, their inflections and general phrases (bundled with the app)
@@ -11,15 +13,16 @@
 # Only core carries the `form` table (inflection -> base word), so the key a saved word
 # gets never depends on which packs are installed.
 # Writes OUT_DIR/dictionary-<pack>.sqlite; with no pack names, writes all of them.
-import csv, os, re, sqlite3, sys, unicodedata
+import csv, json, os, re, sqlite3, sys, unicodedata
 
 SCHEMA = 2
-SOURCE_DATE = "2026-11-17"
-PACKS = {  # id: (title, order)
-    "core": ("核心词典", 0), "extended": ("扩展词汇", 10),
-    "medicine": ("医学", 20), "chemistry": ("化学", 21), "computing": ("计算机", 22), "economics": ("经济", 23),
-    "law": ("法律", 24), "electronics": ("电子电气", 25), "mechanics": ("机械工程", 26), "sciences": ("其他学科", 27),
-    "names": ("人名地名", 30),
+RELEASE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "Dictionaries", "release.json")
+PACKS = {  # id: (title, group, order); the app's Settings › 词典 lists packs by group
+    "core": ("核心词典", "core", 0), "extended": ("扩展词汇", "vocabulary", 10),
+    "medicine": ("医学", "field", 20), "chemistry": ("化学", "field", 21), "computing": ("计算机", "field", 22),
+    "economics": ("经济", "field", 23), "law": ("法律", "field", 24), "electronics": ("电子电气", "field", 25),
+    "mechanics": ("机械工程", "field", 26), "sciences": ("其他学科", "field", 27),
+    "names": ("人名地名", "names", 30),
 }
 FIELDS = {
     "医": "medicine", "药": "medicine", "解": "medicine", "生化": "medicine",
@@ -71,8 +74,8 @@ def english_senses(text):
     return "\n".join(result)
 
 
-def main():
-    src, out_dir, wanted = sys.argv[1], sys.argv[2], set(sys.argv[3:]) or set(PACKS)
+def build(src, out_dir, wanted, version, source_commit, log=print):
+    """Writes OUT_DIR/dictionary-<pack>.sqlite for each pack in `wanted`; returns {pack: entry count}."""
     csv.field_size_limit(10**8)
     rows = {}
     with open(src, encoding="utf-8") as f:
@@ -92,30 +95,6 @@ def main():
             old = rows.get(key)
             if old is None or (word != key, rank) < (old["word"] != old["key"], old["rank"]):
                 rows[key] = row
-
-    common_words = {k for k, r in rows.items() if WORD.match(k) and r["common"]}
-    packs = {p: [] for p in PACKS}
-    for key, r in rows.items():
-        if not (WORD.match(key) or PHRASE.match(key)): continue
-        is_phrase = " " in key
-        lemma = normalize(r["exchange"].get("0", ""))
-        # A field pack only takes entries whose every sense is labelled for a field:
-        # "give up" also has a "[法]" sense but belongs with the general phrases.
-        senses = [line for line in r["translation"].split("\n") if not line.startswith("[网络]")]
-        labels = [FIELD_LABEL.findall(line) for line in senses]
-        fields = {FIELDS.get(m, "sciences") for found in labels for m in found} if senses and all(labels) else set()
-        capitalized = r["word"][:1].isupper()
-        if not is_phrase and (r["common"] or (lemma and lemma in common_words)):
-            packs["core"].append(r)
-        elif is_phrase and not fields and not capitalized and all(
-                w.strip("'.-") in common_words or w in PHRASE_FILLERS for w in key.split()):
-            packs["core"].append(r)
-        elif fields:
-            for field in fields: packs[field].append(r)
-        elif capitalized:
-            packs["names"].append(r)
-        else:
-            packs["extended"].append(r)
 
     # Inflection -> base word. A form redirects to a base that lists it when the form has no entry
     # of its own, or its entry points back at that base ("0:" in its exchange, or a note such as
@@ -137,9 +116,35 @@ def main():
     for form, lemma in IRREGULAR.items(): offer(form, lemma)
     forms = {form: min(lemmas, key=lambda l: (rows[l]["rank"], l)) for form, lemmas in candidates.items()}
 
+    common_words = {k for k, r in rows.items() if WORD.match(k) and r["common"]}
+    packs = {p: [] for p in PACKS}
+    for key, r in rows.items():
+        if not (WORD.match(key) or PHRASE.match(key)): continue
+        is_phrase = " " in key
+        lemma = normalize(r["exchange"].get("0", ""))
+        # A field pack only takes entries whose every sense is labelled for a field:
+        # "give up" also has a "[法]" sense but belongs with the general phrases.
+        senses = [line for line in r["translation"].split("\n") if not line.startswith("[网络]")]
+        labels = [FIELD_LABEL.findall(line) for line in senses]
+        fields = {FIELDS.get(m, "sciences") for found in labels for m in found} if senses and all(labels) else set()
+        capitalized = r["word"][:1].isupper()
+        # Inflections of common words stay with them, so the form table only redirects within core.
+        if not is_phrase and (r["common"] or lemma in common_words or forms.get(key) in common_words):
+            packs["core"].append(r)
+        elif is_phrase and not fields and not capitalized and all(
+                w.strip("'.-") in common_words or w in PHRASE_FILLERS for w in key.split()):
+            packs["core"].append(r)
+        elif fields:
+            for field in fields: packs[field].append(r)
+        elif capitalized:
+            packs["names"].append(r)
+        else:
+            packs["extended"].append(r)
+
     os.makedirs(out_dir, exist_ok=True)
+    counts = {}
     for pack in sorted(wanted):
-        title, order = PACKS[pack]
+        title, group, order = PACKS[pack]
         path = os.path.join(out_dir, f"dictionary-{pack}.sqlite")
         if os.path.exists(path): os.remove(path)
         db = sqlite3.connect(path)
@@ -155,11 +160,19 @@ def main():
             db.execute("CREATE TABLE form(form TEXT PRIMARY KEY, lemma TEXT) WITHOUT ROWID")
             db.executemany("INSERT INTO form VALUES (?,?)", list(forms.items()))
         db.executemany("INSERT INTO meta VALUES (?,?)", [
-            ("schema", str(SCHEMA)), ("id", pack), ("title", title), ("order", str(order)),
-            ("source", "ECDICT"), ("sourceDate", SOURCE_DATE), ("entries", str(len(entries)))])
+            ("schema", str(SCHEMA)), ("id", pack), ("title", title), ("group", group), ("order", str(order)),
+            ("version", version), ("source", "ECDICT"), ("sourceCommit", source_commit), ("entries", str(len(entries)))])
         db.commit(); db.execute("VACUUM"); db.close()
-        print(f"{pack:12} {len(entries):8} entries {os.path.getsize(path) // 1024:8} KB")
-    print(f"{'forms':12} {len(forms):8}")
+        counts[pack] = len(entries)
+        log(f"{pack:12} {len(entries):8} entries {os.path.getsize(path) // 1024:8} KB")
+    log(f"{'forms':12} {len(forms):8}")
+    return counts
+
+
+def main():
+    with open(RELEASE_FILE, encoding="utf-8") as f:
+        release = json.load(f)
+    build(sys.argv[1], sys.argv[2], set(sys.argv[3:]) or set(PACKS), release["version"], release["source"]["commit"])
 
 
 if __name__ == "__main__":
