@@ -43,7 +43,6 @@ struct ReaderView: View {
     @State private var sliderChapter: Double?
     @State private var autoReading = false
     @State private var sheet: ReaderSheet?
-    @State private var systemTerm: SystemTerm?
     @State private var toast: String?
     /// Set while visiting a saved word's source or a search result; the reader's own place is kept here.
     @State private var savedPlace: ReadingPosition?
@@ -133,7 +132,6 @@ struct ReaderView: View {
             case .more: ReaderMoreSettings()
             }
         }
-        .sheet(item: $systemTerm) { SystemDictionary(term: $0.text).ignoresSafeArea() }
         .alert("没有保存成功", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("好", role: .cancel) { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
@@ -259,9 +257,7 @@ struct ReaderView: View {
                 LookupCard(selection: lookup, entry: WordDictionary.shared.lookup(lookup.text),
                            isSaved: store.favorite(matching: lookup.text) != nil,
                            palette: palette,
-                           onSave: { save(lookup) },
-                           onMore: { systemTerm = SystemTerm(text: lookup.text) },
-                           onClose: { self.lookup = nil })
+                           onToggleSaved: { toggleSaved(lookup) })
             }
             .compositingGroup()
             .shadow(color: .black.opacity(0.14), radius: 16, y: 4)
@@ -565,6 +561,16 @@ struct ReaderView: View {
         lookup = selection
     }
 
+    /// The card's star: saves the word, or takes it back out when it's already in the word list.
+    private func toggleSaved(_ selection: ReadingSelection) {
+        if let saved = store.favorite(matching: selection.text) {
+            store.deleteFavorite(id: saved.id)
+            toast = "已从生词本移除"
+        } else {
+            save(selection)
+        }
+    }
+
     private func save(_ selection: ReadingSelection) {
         let result = store.savePassage(bookID: bookID, chapter: chapter, offset: selection.offset,
                                        selection: selection.text, sentence: selection.sentence)
@@ -589,11 +595,6 @@ struct ReaderView: View {
     }
 }
 
-private struct SystemTerm: Identifiable {
-    let id = UUID()
-    var text: String
-}
-
 struct ToastLabel: View {
     var text: String
     var body: some View {
@@ -614,9 +615,7 @@ struct LookupCard: View {
     let isSaved: Bool
     /// The card takes the reading theme's toolbar shade and ink, like the bars around the page.
     var palette = ReaderPalette(day: ReaderTheme.defaultDay, night: ReaderTheme.defaultNight)
-    var onSave: () -> Void
-    var onMore: () -> Void
-    var onClose: () -> Void
+    var onToggleSaved: () -> Void
     @State private var translating = false
     @State private var copied = false
 
@@ -636,10 +635,11 @@ struct LookupCard: View {
                         Text("/\(phonetic)/").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer(minLength: 0)
-                    Button(action: onClose) {
-                        Image(systemName: "xmark.circle.fill").font(.title3).symbolRenderingMode(.hierarchical).foregroundStyle(.secondary)
+                    Button(action: onToggleSaved) {
+                        Image(systemName: isSaved ? "star.fill" : "star").font(.body).foregroundStyle(Color.accent)
                     }
-                    .accessibilityLabel("关闭释义")
+                    .accessibilityLabel(isSaved ? "已在生词本" : "加入生词本")
+                    .accessibilityIdentifier("save-selection")
                 }
                 if let inflected = entry?.inflectedFrom, inflected.lowercased() != entry?.headword.lowercased() {
                     Text("\(inflected) 是 \(entry?.headword ?? "") 的变形").font(.caption).foregroundStyle(.secondary)
@@ -651,26 +651,12 @@ struct LookupCard: View {
                     .frame(maxHeight: 132)
                     .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text(selection.text.contains(" ") ? "离线词典只收录单词。可以用系统词典查这个词组。"
+                    Text(selection.text.contains(" ") ? "离线词典只收录单词，查不到词组。"
                          : isLikelyName ? "离线词典里没有这个词，它可能是人名或地名。" : "离线词典里没有这个词。")
                         .font(.callout).foregroundStyle(.secondary)
                 }
             }
             .foregroundStyle(Color(uiColor: palette.ink))
-            HStack(spacing: 10) {
-                Button(action: onSave) {
-                    Label(isSaved ? "已在生词本" : "加入生词本", systemImage: isSaved ? "bookmark.fill" : "bookmark")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent).disabled(isSaved)
-                .accessibilityIdentifier("save-selection")
-                Button(action: onMore) {
-                    Label("系统词典", systemImage: "character.book.closed").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("lookup-dictionary")
-            }
-            .controlSize(.regular)
             // What the edit menu offered, which the card replaces.
             HStack(spacing: 0) {
                 Button {
@@ -734,10 +720,4 @@ struct LookupBubbleLayout: Layout {
         let pointerX = min(max(anchor.midX, x + 28), x + width - 28)
         pointer.place(at: CGPoint(x: pointerX, y: below ? y : y + height), anchor: .center, proposal: .unspecified)
     }
-}
-
-struct SystemDictionary: UIViewControllerRepresentable {
-    var term: String
-    func makeUIViewController(context: Context) -> UIReferenceLibraryViewController { UIReferenceLibraryViewController(term: term) }
-    func updateUIViewController(_ uiViewController: UIReferenceLibraryViewController, context: Context) {}
 }

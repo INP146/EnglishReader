@@ -146,7 +146,7 @@ struct WordsView: View {
     @ViewBuilder private var emptyState: some View {
         if store.favorites.isEmpty {
             ContentUnavailableView("生词本还是空的", systemImage: "bookmark",
-                                   description: Text("读书时点一个单词，在释义卡片上点“加入生词本”。原句和出处会一起保存。"))
+                                   description: Text("读书时点一个单词，点释义卡片右上角的星标。原句和出处会一起保存。"))
         } else if !search.isEmpty {
             ContentUnavailableView.search(text: search)
         } else {
@@ -211,7 +211,6 @@ struct WordDetail: View {
     let itemID: UUID
     var openSource: () -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var systemDictionary = false
     @State private var confirmDelete = false
 
     private var item: SavedPassage? { store.favorites.first { $0.id == itemID } }
@@ -246,7 +245,6 @@ struct WordDetail: View {
                         }
                     }
                     Section {
-                        Button("用系统词典查看", systemImage: "character.book.closed") { systemDictionary = true }
                         Button(item.mastered ? "移回学习中" : "标为已掌握", systemImage: item.mastered ? "arrow.uturn.backward" : "checkmark") {
                             store.setMastered(id: item.id, !item.mastered)
                         }
@@ -256,7 +254,6 @@ struct WordDetail: View {
                 }
                 .navigationTitle("单词").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
-                .sheet(isPresented: $systemDictionary) { SystemDictionary(term: item.selection).ignoresSafeArea() }
                 .confirmationDialog("从生词本删除“\(item.displayWord)”？", isPresented: $confirmDelete, titleVisibility: .visible) {
                     Button("删除", role: .destructive) { store.deleteFavorite(id: item.id); dismiss() }
                 }
