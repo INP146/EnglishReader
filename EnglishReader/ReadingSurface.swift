@@ -264,7 +264,7 @@ struct ReadingSurface: UIViewRepresentable {
         }
 
         func update(_ value: ReadingSurface, in view: ReaderTextView) {
-            if parent.lookingUp && !value.lookingUp { selectionLookup.dismiss() }
+            if parent.lookingUp && !value.lookingUp { selectionLookup.cardClosed() }
             parent = value // Refresh callbacks even when the document is unchanged.
             let size = ReaderTypography.pointSize(value.layout.fontSize)
             let chapterChanged = renderedChapterID != value.chapter.id
@@ -672,6 +672,7 @@ final class DeferredTap {
 /// Looks up the native selection once per gesture. Dragging a handle reports the selection once, as it lets go, but
 /// a long press that slides on reports every word it passes and adjusts the selection once more just after the lift,
 /// so a selection made under a finger is looked up when it lifts and the selection has stopped changing.
+/// A finger that starts dragging while a card is open (most likely a handle) closes the card but keeps the selection.
 @MainActor
 final class SelectionLookup {
     /// Add to the view the selecting touches land in.
@@ -682,8 +683,21 @@ final class SelectionLookup {
     private weak var view: UITextView?
     private var pending = false
     private var settle: Task<Void, Never>?
+    /// A card is showing this selection.
+    private var showing = false
+    /// The card was closed for a drag, so its closing must not let go of the selection.
+    private var hidden = false
 
     init() {
+        fingers.onMove = { [weak self] in
+            guard let self, self.showing, let view = self.view, view.selectedRange.length > 0 else { return }
+            self.showing = false
+            self.hidden = true
+            self.pending = true
+            self.settle?.cancel()
+            self.settle = nil
+            self.clear()
+        }
         fingers.onLift = { [weak self] in
             guard let self, self.pending else { return }
             self.pending = false
@@ -696,6 +710,8 @@ final class SelectionLookup {
             guard self.view === view else { return }
             self.view = nil
             cancel()
+            showing = false
+            hidden = false
             clear()
             return
         }
@@ -710,9 +726,16 @@ final class SelectionLookup {
         }
     }
 
+    /// The card closed: lets go of the selection it showed, unless it only closed for a drag.
+    func cardClosed() {
+        if hidden { hidden = false } else { dismiss() }
+    }
+
     /// The card closed some other way: lets go of the selection it showed.
     func dismiss() {
         cancel()
+        showing = false
+        hidden = false
         guard let view else { return }
         self.view = nil
         if view.selectedRange.length > 0 { view.selectedRange = NSRange(location: 0, length: 0) }
@@ -743,14 +766,20 @@ final class SelectionLookup {
 
     private func lookUp() {
         guard let view, let value = ReaderTextTools.selection(for: view.selectedRange, in: view) else { return }
+        showing = true
+        hidden = false // Showing again before SwiftUI saw the card close: there is no closing left to skip.
         look(value, view)
     }
 }
 
 /// Follows fingers without taking part in any gesture: it never recognizes, and nothing prevents it from watching.
 final class FingerWatch: UIGestureRecognizer {
+    /// Once per gesture, when a finger has moved past a tap's slop.
+    var onMove: () -> Void = {}
     var onLift: () -> Void = {}
     private(set) var touching = false
+    private var start: CGPoint?
+    private var moved = false
 
     init() {
         super.init(target: nil, action: nil)
@@ -761,7 +790,17 @@ final class FingerWatch: UIGestureRecognizer {
     override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
     override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
 
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) { touching = true }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if !touching { start = touches.first?.location(in: nil) }
+        touching = true
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard !moved, let start, let point = touches.first?.location(in: nil),
+              hypot(point.x - start.x, point.y - start.y) > 10 else { return }
+        moved = true
+        onMove()
+    }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { lifted(touches, event) }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { lifted(touches, event) }
 
@@ -769,6 +808,8 @@ final class FingerWatch: UIGestureRecognizer {
         let down = (event.touches(for: self) ?? []).subtracting(touches).contains { $0.phase != .ended && $0.phase != .cancelled }
         guard !down else { return }
         touching = false
+        start = nil
+        moved = false
         state = .failed
         onLift()
     }
@@ -776,6 +817,8 @@ final class FingerWatch: UIGestureRecognizer {
     override func reset() {
         super.reset()
         touching = false
+        start = nil
+        moved = false
     }
 }
 

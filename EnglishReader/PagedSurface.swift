@@ -206,7 +206,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     func update(_ value: PagedSurface) {
         let old = config
         config = value
-        if old.lookingUp && !value.lookingUp { selectionLookup.dismiss() }
+        if old.lookingUp && !value.lookingUp { selectionLookup.cardClosed() }
         if old.backdrop != value.backdrop || old.backdropVersion != value.backdropVersion {
             for page in laidOut.values.flatMap(\.cache.values) { page.backdrop.backdrop = value.backdrop; page.backdrop.refresh() }
         }
