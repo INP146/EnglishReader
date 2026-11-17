@@ -11,6 +11,8 @@ struct SettingsView: View {
                     NavigationLink { ReaderPreferencesView() } label: {
                         SettingsIconLabel("阅读器设置", systemImage: "book.pages.fill", color: .orange)
                     }
+                }
+                Section {
                     NavigationLink { AboutView() } label: {
                         SettingsIconLabel("关于", systemImage: "info", color: .gray)
                     }
