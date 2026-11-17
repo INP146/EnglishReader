@@ -161,9 +161,7 @@ enum ReaderBackdrop: String, CaseIterable, Identifiable {
     }
 
     /// The reader's own picture, kept beside the library.
-    static let customImageURL = URL.applicationSupportDirectory
-        .appendingPathComponent("EnglishReader", isDirectory: true)
-        .appendingPathComponent("reader-background.jpg")
+    static let customImageURL = URL.appData.appendingPathComponent("reader-background.jpg")
 
     @MainActor static var customImage: UIImage? {
         if let cached = imageCache, cached.version == customImageVersion { return cached.image }

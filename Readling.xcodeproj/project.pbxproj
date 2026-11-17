@@ -16,37 +16,37 @@
 			containerPortal = 8238217991C4C82D1BCE751B /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 2E69B1330A3161295C9DCB01;
-			remoteInfo = EnglishReader;
+			remoteInfo = Readling;
 		};
 		B1B2C3D40000000000000001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 8238217991C4C82D1BCE751B /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 2E69B1330A3161295C9DCB01;
-			remoteInfo = EnglishReader;
+			remoteInfo = Readling;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		A1B2C3D40000000000000002 /* EnglishReaderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EnglishReaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		E1D1C645818EB0816572F68E /* EnglishReader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EnglishReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		B1B2C3D40000000000000002 /* EnglishReaderUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EnglishReaderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D40000000000000002 /* ReadlingTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ReadlingTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E1D1C645818EB0816572F68E /* Readling.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Readling.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1B2C3D40000000000000002 /* ReadlingUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ReadlingUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		32FA6C0B59B4A7B42DDCEA33 /* EnglishReader */ = {
+		32FA6C0B59B4A7B42DDCEA33 /* Readling */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = EnglishReader;
+			path = Readling;
 			sourceTree = "<group>";
 		};
-		A1B2C3D40000000000000003 /* EnglishReaderTests */ = {
+		A1B2C3D40000000000000003 /* ReadlingTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = EnglishReaderTests;
+			path = ReadlingTests;
 			sourceTree = "<group>";
 		};
-		B1B2C3D40000000000000003 /* EnglishReaderUITests */ = {
+		B1B2C3D40000000000000003 /* ReadlingUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = EnglishReaderUITests;
+			path = ReadlingUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -66,9 +66,9 @@
 		4B2A5E79F7D5BFD1F7DCE292 = {
 			isa = PBXGroup;
 			children = (
-				32FA6C0B59B4A7B42DDCEA33 /* EnglishReader */,
-				A1B2C3D40000000000000003 /* EnglishReaderTests */,
-				B1B2C3D40000000000000003 /* EnglishReaderUITests */,
+				32FA6C0B59B4A7B42DDCEA33 /* Readling */,
+				A1B2C3D40000000000000003 /* ReadlingTests */,
+				B1B2C3D40000000000000003 /* ReadlingUITests */,
 				A0906AD77C76E090572F0E63 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -76,9 +76,9 @@
 		A0906AD77C76E090572F0E63 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				E1D1C645818EB0816572F68E /* EnglishReader.app */,
-				A1B2C3D40000000000000002 /* EnglishReaderTests.xctest */,
-				B1B2C3D40000000000000002 /* EnglishReaderUITests.xctest */,
+				E1D1C645818EB0816572F68E /* Readling.app */,
+				A1B2C3D40000000000000002 /* ReadlingTests.xctest */,
+				B1B2C3D40000000000000002 /* ReadlingUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -86,9 +86,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		2E69B1330A3161295C9DCB01 /* EnglishReader */ = {
+		2E69B1330A3161295C9DCB01 /* Readling */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 8C42E519CFA30563C7D495EB /* Build configuration list for PBXNativeTarget "EnglishReader" */;
+			buildConfigurationList = 8C42E519CFA30563C7D495EB /* Build configuration list for PBXNativeTarget "Readling" */;
 			buildPhases = (
 				485B7BB5562F3ABD154D4B35 /* Sources */,
 				C10000000000000000000003 /* Frameworks */,
@@ -99,19 +99,19 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				32FA6C0B59B4A7B42DDCEA33 /* EnglishReader */,
+				32FA6C0B59B4A7B42DDCEA33 /* Readling */,
 			);
-			name = EnglishReader;
+			name = Readling;
 			packageProductDependencies = (
 				C10000000000000000000002 /* ZIPFoundation */,
 			);
-			productName = EnglishReader;
-			productReference = E1D1C645818EB0816572F68E /* EnglishReader.app */;
+			productName = Readling;
+			productReference = E1D1C645818EB0816572F68E /* Readling.app */;
 			productType = "com.apple.product-type.application";
 		};
-		A1B2C3D40000000000000004 /* EnglishReaderTests */ = {
+		A1B2C3D40000000000000004 /* ReadlingTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A1B2C3D40000000000000005 /* Build configuration list for PBXNativeTarget "EnglishReaderTests" */;
+			buildConfigurationList = A1B2C3D40000000000000005 /* Build configuration list for PBXNativeTarget "ReadlingTests" */;
 			buildPhases = (
 				A1B2C3D40000000000000006 /* Sources */,
 				C10000000000000000000005 /* Resources */,
@@ -122,16 +122,16 @@
 				A1B2C3D40000000000000007 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				A1B2C3D40000000000000003 /* EnglishReaderTests */,
+				A1B2C3D40000000000000003 /* ReadlingTests */,
 			);
-			name = EnglishReaderTests;
-			productName = EnglishReaderTests;
-			productReference = A1B2C3D40000000000000002 /* EnglishReaderTests.xctest */;
+			name = ReadlingTests;
+			productName = ReadlingTests;
+			productReference = A1B2C3D40000000000000002 /* ReadlingTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		B1B2C3D40000000000000004 /* EnglishReaderUITests */ = {
+		B1B2C3D40000000000000004 /* ReadlingUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = B1B2C3D40000000000000005 /* Build configuration list for PBXNativeTarget "EnglishReaderUITests" */;
+			buildConfigurationList = B1B2C3D40000000000000005 /* Build configuration list for PBXNativeTarget "ReadlingUITests" */;
 			buildPhases = (
 				B1B2C3D40000000000000006 /* Sources */,
 				B1B2C3D4000000000000000A /* Resources */,
@@ -142,11 +142,11 @@
 				B1B2C3D40000000000000007 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				B1B2C3D40000000000000003 /* EnglishReaderUITests */,
+				B1B2C3D40000000000000003 /* ReadlingUITests */,
 			);
-			name = EnglishReaderUITests;
-			productName = EnglishReaderUITests;
-			productReference = B1B2C3D40000000000000002 /* EnglishReaderUITests.xctest */;
+			name = ReadlingUITests;
+			productName = ReadlingUITests;
+			productReference = B1B2C3D40000000000000002 /* ReadlingUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
@@ -169,7 +169,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 5075F2191BCB6FFD9AB675B1 /* Build configuration list for PBXProject "EnglishReader" */;
+			buildConfigurationList = 5075F2191BCB6FFD9AB675B1 /* Build configuration list for PBXProject "Readling" */;
 			developmentRegion = "zh-Hans";
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -186,9 +186,9 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				2E69B1330A3161295C9DCB01 /* EnglishReader */,
-				A1B2C3D40000000000000004 /* EnglishReaderTests */,
-				B1B2C3D40000000000000004 /* EnglishReaderUITests */,
+				2E69B1330A3161295C9DCB01 /* Readling */,
+				A1B2C3D40000000000000004 /* ReadlingTests */,
+				B1B2C3D40000000000000004 /* ReadlingUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -244,12 +244,12 @@
 /* Begin PBXTargetDependency section */
 		A1B2C3D40000000000000007 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 2E69B1330A3161295C9DCB01 /* EnglishReader */;
+			target = 2E69B1330A3161295C9DCB01 /* Readling */;
 			targetProxy = A1B2C3D40000000000000001 /* PBXContainerItemProxy */;
 		};
 		B1B2C3D40000000000000007 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 2E69B1330A3161295C9DCB01 /* EnglishReader */;
+			target = 2E69B1330A3161295C9DCB01 /* Readling */;
 			targetProxy = B1B2C3D40000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -326,7 +326,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
-				INFOPLIST_KEY_CFBundleDisplayName = "英文阅读器";
+				INFOPLIST_KEY_CFBundleDisplayName = Readling;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -336,8 +336,8 @@
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.reader-m7k2";
-				PRODUCT_NAME = EnglishReader;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.readling";
+				PRODUCT_NAME = Readling;
 				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -405,9 +405,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.reader-m7k2.tests";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.readling.tests";
 				TARGETED_DEVICE_FAMILY = 1;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EnglishReader.app/EnglishReader";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Readling.app/Readling";
 			};
 			name = Debug;
 		};
@@ -415,9 +415,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.reader-m7k2.tests";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.readling.tests";
 				TARGETED_DEVICE_FAMILY = 1;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EnglishReader.app/EnglishReader";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Readling.app/Readling";
 			};
 			name = Release;
 		};
@@ -428,7 +428,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				INFOPLIST_KEY_CFBundleDisplayName = "英文阅读器";
+				INFOPLIST_KEY_CFBundleDisplayName = Readling;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -438,8 +438,8 @@
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.reader-m7k2";
-				PRODUCT_NAME = EnglishReader;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.readling";
+				PRODUCT_NAME = Readling;
 				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -450,9 +450,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.reader-m7k2.uitests";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.readling.uitests";
 				TARGETED_DEVICE_FAMILY = 1;
-				TEST_TARGET_NAME = EnglishReader;
+				TEST_TARGET_NAME = Readling;
 			};
 			name = Debug;
 		};
@@ -460,16 +460,16 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.reader-m7k2.uitests";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.readling.uitests";
 				TARGETED_DEVICE_FAMILY = 1;
-				TEST_TARGET_NAME = EnglishReader;
+				TEST_TARGET_NAME = Readling;
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		5075F2191BCB6FFD9AB675B1 /* Build configuration list for PBXProject "EnglishReader" */ = {
+		5075F2191BCB6FFD9AB675B1 /* Build configuration list for PBXProject "Readling" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				19E964B74B00A4CB2EF3C8A9 /* Debug */,
@@ -478,7 +478,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
-		8C42E519CFA30563C7D495EB /* Build configuration list for PBXNativeTarget "EnglishReader" */ = {
+		8C42E519CFA30563C7D495EB /* Build configuration list for PBXNativeTarget "Readling" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				2E90AD925E4ACFB91CB0744B /* Debug */,
@@ -487,7 +487,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
-		A1B2C3D40000000000000005 /* Build configuration list for PBXNativeTarget "EnglishReaderTests" */ = {
+		A1B2C3D40000000000000005 /* Build configuration list for PBXNativeTarget "ReadlingTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A1B2C3D40000000000000008 /* Debug */,
@@ -496,7 +496,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
-		B1B2C3D40000000000000005 /* Build configuration list for PBXNativeTarget "EnglishReaderUITests" */ = {
+		B1B2C3D40000000000000005 /* Build configuration list for PBXNativeTarget "ReadlingUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B1B2C3D40000000000000008 /* Debug */,

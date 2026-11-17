@@ -1,6 +1,6 @@
 # 离线词典：设计与计划
 
-记录查词词典的分包方式、单词卡排版、下载机制和后续扩展的设计决定，以及实施进度。数据来源与许可见 `EnglishReader/SOURCE.md`。
+记录查词词典的分包方式、单词卡排版、下载机制和后续扩展的设计决定，以及实施进度。数据来源与许可见 `Readling/SOURCE.md`。
 
 ## 目标
 
@@ -93,12 +93,12 @@ form(form TEXT PRIMARY KEY, lemma TEXT)  -- 仅 core：变形 → 原形
 
 ## 下载（第 2 步）
 
-- **托管**：词典包压缩成 zip，作为 GitHub Releases 资源，发布在本仓库（INP146/EnglishReader，公开）的 `dict-<版本>` 标签下，见 `docs/release.md`。App Store 托管的 On-Demand Resources 和 Background Assets 不适用：app 目前是重签安装，不经过 App Store。
-- **清单**：`Dictionaries/manifest.json` 放在仓库里，app 从 `raw.githubusercontent.com/INP146/EnglishReader/main/Dictionaries/manifest.json` 读取。清单写明格式（`format: 1`）和版本（`release`），每个包写明 id、名称、分组、顺序、schema、版本、条目数、zip 大小、解压后大小、sha256、下载地址。
+- **托管**：词典包压缩成 zip，作为 GitHub Releases 资源，发布在本仓库（INP146/Readling，公开）的 `dict-<版本>` 标签下，见 `docs/release.md`。App Store 托管的 On-Demand Resources 和 Background Assets 不适用：app 目前是重签安装，不经过 App Store。
+- **清单**：`Dictionaries/manifest.json` 放在仓库里，app 从 `raw.githubusercontent.com/INP146/Readling/main/Dictionaries/manifest.json` 读取。清单写明格式（`format: 1`）和版本（`release`），每个包写明 id、名称、分组、顺序、schema、版本、条目数、zip 大小、解压后大小、sha256、下载地址。
 - **下载与安装**：
   - 下载用 `URLSession` 的下载任务，失败时保留续传数据（resume data）。最大的包压缩后约 9 MB，所以不用后台会话（background session）。
   - 下完先校验 sha256，再用 ZIPFoundation 解压到临时目录。
-  - 用 `DictionaryPack` 打开校验 schema 和 id，原子地移动到 `Application Support/EnglishReader/Dictionaries/<id>.sqlite`，并标记为不进 iCloud 备份（可以重新下载）。
+  - 用 `DictionaryPack` 打开校验 schema 和 id，原子地移动到 `Application Support/Readling/Dictionaries/<id>.sqlite`，并标记为不进 iCloud 备份（可以重新下载）。
   - 最后调用 `WordDictionary.reload()`。
 - **更新与删除**：清单里的版本比已装的新，就显示“更新”；删除时先关闭数据库再删文件，然后重新加载。
 - **隐私说明**：书和生词从不上传；只有在用户主动打开词典设置或下载词典时才联网。“关于”页和 SOURCE.md 同步改写。

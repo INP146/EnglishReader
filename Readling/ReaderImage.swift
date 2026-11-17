@@ -3,7 +3,7 @@ import ImageIO
 
 extension NSAttributedString.Key {
     /// On linked text: the link's target, as stored in the style run.
-    static let readerLink = NSAttributedString.Key("EnglishReader.link")
+    static let readerLink = NSAttributedString.Key("Readling.link")
 }
 
 /// An image of the book drawn inline in chapter text.

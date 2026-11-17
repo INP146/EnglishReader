@@ -28,9 +28,7 @@ final class LibraryStore {
     }
 
     init(fileURL: URL? = nil) {
-        self.fileURL = fileURL ?? URL.applicationSupportDirectory
-            .appendingPathComponent("EnglishReader", isDirectory: true)
-            .appendingPathComponent("library.json")
+        self.fileURL = fileURL ?? URL.appData.appendingPathComponent("library.json")
         load()
         // An import that was interrupted leaves its unpacked files behind.
         for name in (try? FileManager.default.contentsOfDirectory(atPath: booksDirectory.path)) ?? [] where name.hasSuffix(".partial") {

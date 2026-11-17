@@ -159,9 +159,7 @@ final class WordDictionary {
     static let shared = WordDictionary()
 
     /// Where downloaded packs live.
-    static let packsDirectory = URL.applicationSupportDirectory
-        .appendingPathComponent("EnglishReader", isDirectory: true)
-        .appendingPathComponent("Dictionaries", isDirectory: true)
+    static let packsDirectory = URL.appData.appendingPathComponent("Dictionaries", isDirectory: true)
 
     private let core: DictionaryPack?
     /// Where this dictionary looks for downloaded packs.

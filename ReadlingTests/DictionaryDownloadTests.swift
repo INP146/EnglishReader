@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 import Testing
 import ZIPFoundation
-@testable import EnglishReader
+@testable import Readling
 
 @Suite("Dictionary pack downloads") @MainActor
 struct DictionaryDownloadTests {

@@ -26,10 +26,10 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-REPOSITORY = "INP146/EnglishReader"
+REPOSITORY = "INP146/Readling"
 RELEASE = Path("Dictionaries/release.json")
 MANIFEST = Path("Dictionaries/manifest.json")
-CORE = Path("EnglishReader/Resources/dictionary-core.sqlite")
+CORE = Path("Readling/Resources/dictionary-core.sqlite")
 BUILD = Path("build/dict")
 SOURCE_CSV = Path("build/ecdict/ecdict.csv")
 NOTES = Path("docs/releases")

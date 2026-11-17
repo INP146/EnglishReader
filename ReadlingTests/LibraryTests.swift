@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import UIKit
-@testable import EnglishReader
+@testable import Readling
 
 @Suite("Offline library storage") @MainActor
 struct LibraryTests {
@@ -578,7 +578,7 @@ func replacingSecondChapter(with chapter: String) -> [(String, Data, UInt32?)] {
 }
 
 func scratchDirectory() throws -> URL {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("EnglishReaderTests-\(UUID().uuidString)", isDirectory: true)
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ReadlingTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory
 }

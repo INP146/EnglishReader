@@ -350,7 +350,7 @@ struct AboutView: View {
                         .font(.system(size: 44))
                         .foregroundStyle(Color.accent)
                         .padding(.bottom, 4)
-                    Text("英文阅读器").font(.title3.weight(.semibold))
+                    Text(verbatim: "Readling").font(.title3.weight(.semibold))
                     Text("离线阅读英文书，点词即查，生词随读随记。")
                         .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }

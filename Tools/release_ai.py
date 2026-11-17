@@ -86,11 +86,11 @@ def validate_base_tag(root: Path, previous: str | None, base_tag: str | None = N
 
 
 def make_prompt(version: str, base_tag: str, target: str) -> str:
-    return f"""在当前 EnglishReader 仓库中为词典包 dict-{version} 编写中文发布说明，直接编辑 {target}。
+    return f"""在当前 Readling 仓库中为词典包 dict-{version} 编写中文发布说明，直接编辑 {target}。
 先阅读 AGENTS.md、docs/release.md 和 docs/releases/ 里的历史发布说明。自行查看
 {base_tag} 到当前工作区的 Git 提交和差异（含未提交的改动），重点是 Tools/build-dictionary.py
 的收录与分包规则、Dictionaries/release.json 的数据源，以及查词相关的 app 代码；需要时可以用
-sqlite3 对比 build/dict 里刚构建的词典包和 EnglishReader/Resources/dictionary-core.sqlite。
+sqlite3 对比 build/dict 里刚构建的词典包和 Readling/Resources/dictionary-core.sqlite。
 在模板中填写“主要变更”：读者能感知的收录或释义变化、各包条目数变化的原因、数据源是否更换、
 是否需要新版 app（例如词典包 schema 变化）。按实际代码和数据判断，不要臆测。
 保持标题、章节结构和词典包表格；保留顶部 RELEASE_TODO 人工审阅标记，有待确认的内容也用

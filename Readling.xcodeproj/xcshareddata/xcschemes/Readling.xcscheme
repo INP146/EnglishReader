@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "2E69B1330A3161295C9DCB01"
-               BuildableName = "EnglishReader.app"
-               BlueprintName = "EnglishReader"
-               ReferencedContainer = "container:EnglishReader.xcodeproj">
+               BuildableName = "Readling.app"
+               BlueprintName = "Readling"
+               ReferencedContainer = "container:Readling.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -33,9 +33,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "2E69B1330A3161295C9DCB01"
-            BuildableName = "EnglishReader.app"
-            BlueprintName = "EnglishReader"
-            ReferencedContainer = "container:EnglishReader.xcodeproj">
+            BuildableName = "Readling.app"
+            BlueprintName = "Readling"
+            ReferencedContainer = "container:Readling.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -43,18 +43,18 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "A1B2C3D40000000000000004"
-               BuildableName = "EnglishReaderTests.xctest"
-               BlueprintName = "EnglishReaderTests"
-               ReferencedContainer = "container:EnglishReader.xcodeproj">
+               BuildableName = "ReadlingTests.xctest"
+               BlueprintName = "ReadlingTests"
+               ReferencedContainer = "container:Readling.xcodeproj">
             </BuildableReference>
          </TestableReference>
          <TestableReference skipped = "NO" parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "B1B2C3D40000000000000004"
-               BuildableName = "EnglishReaderUITests.xctest"
-               BlueprintName = "EnglishReaderUITests"
-               ReferencedContainer = "container:EnglishReader.xcodeproj">
+               BuildableName = "ReadlingUITests.xctest"
+               BlueprintName = "ReadlingUITests"
+               ReferencedContainer = "container:Readling.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -74,9 +74,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "2E69B1330A3161295C9DCB01"
-            BuildableName = "EnglishReader.app"
-            BlueprintName = "EnglishReader"
-            ReferencedContainer = "container:EnglishReader.xcodeproj">
+            BuildableName = "Readling.app"
+            BlueprintName = "Readling"
+            ReferencedContainer = "container:Readling.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -93,9 +93,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "2E69B1330A3161295C9DCB01"
-            BuildableName = "EnglishReader.app"
-            BlueprintName = "EnglishReader"
-            ReferencedContainer = "container:EnglishReader.xcodeproj">
+            BuildableName = "Readling.app"
+            BlueprintName = "Readling"
+            ReferencedContainer = "container:Readling.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

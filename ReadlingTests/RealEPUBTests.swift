@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import UIKit
-@testable import EnglishReader
+@testable import Readling
 
 private final class ResourceMarker: NSObject {}
 
