@@ -56,10 +56,6 @@ struct ReaderView: View {
         guard let content, content.chapters.indices.contains(chapter) else { return nil }
         return content.chapters[chapter]
     }
-    private func chapter(at index: Int) -> ReaderChapter? {
-        guard let content, content.chapters.indices.contains(index) else { return nil }
-        return content.chapters[index]
-    }
     private var chapterCount: Int { content?.chapters.count ?? book?.chapters.count ?? 0 }
     private var resources: URL? { book.flatMap { store.resourcesURL(for: $0) } }
     private var hasNext: Bool { chapter + 1 < chapterCount }
@@ -161,12 +157,11 @@ struct ReaderView: View {
         if pageTurn.isPaged {
             PagedSurface(
                 chapter: current, chapterIndex: chapter, chapterCount: chapterCount,
-                previousChapter: chapter(at: chapter - 1), nextChapter: chapter(at: chapter + 1),
+                chapters: content?.chapters ?? [],
                 layout: layout, palette: palette, backdrop: backdrop, backdropVersion: backdropVersion,
                 turn: pageTurn, initialOffset: offset, jump: jump, learningForms: learningForms,
                 lookingUp: lookup != nil,
                 interactive: !chromeVisible,
-                edgeTapsTurnPages: lookup == nil && !chromeVisible,
                 autoTurnInterval: autoRunning ? Double(34 - 3 * autoSpeed) : nil,
                 onPosition: positionChanged,
                 onTapWord: { show($0) },
@@ -174,9 +169,9 @@ struct ReaderView: View {
                 onTurn: { lookup = nil; hideChrome() },
                 onLookup: { show($0) },
                 onSave: { save($0) },
-                onChapterTurn: { forward in
+                onChapterTurn: { index in
                     // The surface already shows the new chapter; its position report follows.
-                    chapter += forward ? 1 : -1
+                    chapter = index
                     jump = nil
                 },
                 onBoundary: { forward in

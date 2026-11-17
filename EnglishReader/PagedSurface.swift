@@ -12,8 +12,8 @@ struct PagedSurface: UIViewControllerRepresentable {
     /// Zero-based, for the "chapter n of m" footer.
     var chapterIndex: Int
     var chapterCount: Int
-    var previousChapter: ReaderChapter?
-    var nextChapter: ReaderChapter?
+    /// Every chapter of the book, so a page's neighbours never depend on SwiftUI catching up after a chapter turn.
+    var chapters: [ReaderChapter]
     var layout: ReaderLayout
     var palette: ReaderPalette
     var backdrop: ReaderBackdrop
@@ -27,8 +27,6 @@ struct PagedSurface: UIViewControllerRepresentable {
     var lookingUp: Bool
     /// False while the toolbars are up: taps only dismiss them, and words can't be looked up or selected.
     var interactive: Bool
-    /// While the lookup card or toolbars are up, edge taps close them instead of turning.
-    var edgeTapsTurnPages: Bool
     /// Seconds per page while auto reading.
     var autoTurnInterval: Double?
     var onPosition: (_ offset: Int, _ fraction: Double) -> Void
@@ -37,8 +35,8 @@ struct PagedSurface: UIViewControllerRepresentable {
     var onTurn: () -> Void
     var onLookup: (ReadingSelection) -> Void
     var onSave: (ReadingSelection) -> Void
-    /// A page turn carried reading into the neighbouring chapter, which this surface now shows.
-    var onChapterTurn: (_ forward: Bool) -> Void
+    /// A page turn carried reading into another chapter, which this surface now shows.
+    var onChapterTurn: (_ index: Int) -> Void
     /// Tried to turn past the first or last page of the book.
     var onBoundary: (_ forward: Bool) -> Void
     /// Where the book's image files are; without it pictures are left out.
@@ -104,9 +102,10 @@ final class PagedChapter {
 final class PagerController: UIViewController, UIPageViewControllerDataSource, UIPageViewControllerDelegate,
                              UITextViewDelegate, UIGestureRecognizerDelegate {
     private var config: PagedSurface
+    /// Chapters laid out so far, by number: the one being read and its neighbours.
+    private var laidOut: [Int: PagedChapter] = [:]
+    /// The chapter of the page on screen.
     private var book: PagedChapter?
-    private var previousLayout: PagedChapter?
-    private var nextLayout: PagedChapter?
     private var current = 0
     private var renderedKey: RenderKey?
     private var anchor: Int
@@ -119,9 +118,18 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     /// Cover and no-animation modes show one page here and animate by hand.
     private let host = UIView()
     private var hosted: PageController?
-    private var animating = false
-    /// Set after crossing into a neighbouring chapter, until the pager has re-asked for the new neighbours.
-    private var pagerNeedsRefresh = false
+    /// Cover mode's slide in flight; a new turn skips it to the end rather than waiting.
+    private var hostedTurn: UIViewPropertyAnimator?
+    /// Our own animated turn in the pager, until it lands.
+    private var ownTurn: Int?
+    private var turnSerial = 0
+    /// Swiped curl turns in flight. Curl lets fast swipes overlap, pairing each start with a finish.
+    private var swipesInFlight = 0
+    private var lastSwipeEvent: CFTimeInterval = 0
+    /// Turns asked for while the pager was busy: + forward, − back.
+    private var queuedTurns = 0
+    /// Runs queued turns once the pager lets them.
+    private var drain: Task<Void, Never>?
     private var autoTurn: (interval: Double, task: Task<Void, Never>)?
 
     private struct RenderKey: Equatable {
@@ -182,27 +190,23 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         renderIfNeeded()
     }
 
-    private var layouts: [PagedChapter] { [previousLayout, book, nextLayout].compactMap { $0 } }
-
     func update(_ value: PagedSurface) {
         let old = config
         config = value
         if old.lookingUp && !value.lookingUp { flash.cancel() }
         if old.backdrop != value.backdrop || old.backdropVersion != value.backdropVersion {
-            for page in layouts.flatMap(\.cache.values) { page.backdrop.backdrop = value.backdrop; page.backdrop.refresh() }
+            for page in laidOut.values.flatMap(\.cache.values) { page.backdrop.backdrop = value.backdrop; page.backdrop.refresh() }
         }
         if old.interactive != value.interactive {
-            for page in layouts.flatMap(\.cache.values) { page.textView?.isSelectable = value.interactive }
+            for page in laidOut.values.flatMap(\.cache.values) { page.textView?.isSelectable = value.interactive }
         }
         if let jump = value.jump, jump.id != lastJumpID {
             lastJumpID = jump.id
             pendingJump = jump
+            queuedTurns = 0
         }
-        // Neighbours laid out for another chapter (after a jump through the contents, say) are stale.
-        if previousLayout?.chapter.id != value.previousChapter?.id { previousLayout = nil }
-        if nextLayout?.chapter.id != value.nextChapter?.id { nextLayout = nil }
         renderIfNeeded()
-        if old.learningForms != value.learningForms { layouts.forEach { $0.applyMarks(value.learningForms) } }
+        if old.learningForms != value.learningForms { laidOut.values.forEach { $0.applyMarks(value.learningForms) } }
         if let jump = pendingJump, let book {
             pendingJump = nil
             show(book.pageIndex(containing: jump.offset), of: book, forward: true, animated: false)
@@ -213,14 +217,6 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
             }
         }
         if value.autoTurnInterval != autoTurn?.interval { restartAutoTurn() }
-        refreshPagerIfNeeded()
-    }
-
-    /// Page view controllers cache "no page" past an end; once the new chapter's neighbours are known, ask again.
-    private func refreshPagerIfNeeded() {
-        guard pagerNeedsRefresh, !animating, let pager, let book, let page = book.cache[current] else { return }
-        pagerNeedsRefresh = false
-        pager.setViewControllers([page], direction: .forward, animated: false)
     }
 
     // MARK: Pagination
@@ -267,12 +263,12 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         renderedKey = key
         view.backgroundColor = config.palette.paper
         flash.cancel()
-        previousLayout = nil
-        nextLayout = nil
         let book = makeLayout(for: config.chapter, number: config.chapterIndex)
+        laidOut = [book.number: book]
         self.book = book
         current = -1
         lastReported = nil
+        queuedTurns = 0
         show(book.pageIndex(containing: anchor), of: book, forward: true, animated: false)
     }
 
@@ -281,17 +277,19 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
                      ink: config.palette.ink, pageSize: textFrame.size, forms: config.learningForms, resources: config.resources)
     }
 
-    /// The neighbouring chapter, laid out on first use.
-    private func neighbour(forward: Bool) -> PagedChapter? {
-        if forward {
-            guard let chapter = config.nextChapter else { return nil }
-            if nextLayout == nil { nextLayout = makeLayout(for: chapter, number: config.chapterIndex + 1) }
-            return nextLayout
-        } else {
-            guard let chapter = config.previousChapter else { return nil }
-            if previousLayout == nil { previousLayout = makeLayout(for: chapter, number: config.chapterIndex - 1) }
-            return previousLayout
-        }
+    /// Chapter `number`, laid out on first use; nil past either end of the book.
+    private func chapterLayout(_ number: Int) -> PagedChapter? {
+        if let layout = laidOut[number] { return layout }
+        guard config.chapters.indices.contains(number) else { return nil }
+        let layout = makeLayout(for: config.chapters[number], number: number)
+        laidOut[number] = layout
+        return layout
+    }
+
+    /// Lets go of chapters more than one away from the one being read, whose pages can't be on screen.
+    private func trimLayouts() {
+        guard let book else { return }
+        laidOut = laidOut.filter { abs($0.key - book.number) <= 1 }
     }
 
     private func page(_ index: Int, of layout: PagedChapter) -> PageController {
@@ -316,6 +314,8 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
             text.dataDetectorTypes = []
             text.delegate = self
             text.accessibilityHint = "可用辅助功能操作选择单词、查词或收藏。"
+            // For UI tests: "page 2/3 4/12" is page 4 of 12 in chapter 2 of 3.
+            text.accessibilityIdentifier = "page \(layout.number + 1)/\(max(config.chapterCount, 1)) \(index + 1)/\(layout.pages.count)"
             page.textView = text
             page.header.text = layout.chapter.title
             page.footer.text = "\(index + 1) / \(layout.pages.count)"
@@ -328,17 +328,78 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
 
     // MARK: Turning
 
-    private func turn(forward: Bool) {
-        guard !animating, let book else { return }
+    /// Whether the pager mustn't be driven: a turn is moving or a finger is on it. Setting its pages then strands a
+    /// page on top of all later ones (curl) or loses the turn's completion (scroll). `tapping` leaves out the finger
+    /// whose tap is asking, which is lifting.
+    private func pagerBusy(tapping: Bool = false) -> Bool {
+        guard let pager else { return false }
+        if ownTurn != nil { return true }
+        if swipesInFlight > 0 {
+            if CACurrentMediaTime() - lastSwipeEvent < 2 { return true }
+            swipesInFlight = 0 // A finish UIKit never delivered must not freeze the pages.
+        }
+        if let scroll = pagerScroll {
+            return scroll.isDragging || scroll.isDecelerating || (!tapping && scroll.isTracking)
+        }
+        return pager.gestureRecognizers.contains { $0.state == .began || $0.state == .changed }
+    }
+
+    /// A scroll-style pager's own scroll view. Its transition callbacks don't pair up the way curl's do, so whether
+    /// a swipe is still moving is read from here instead.
+    private var pagerScroll: UIScrollView? {
+        pager?.view.subviews.first { $0 is UIScrollView } as? UIScrollView
+    }
+
+    /// After a turn, once nothing is moving: follows the pager to the page it shows, lets go of far chapters and runs
+    /// turns asked for meanwhile. Never from inside the pager's own callbacks.
+    private func settle() {
+        Task { @MainActor [weak self] in
+            guard let self, !self.pagerBusy() else { return }
+            // Scroll-style pagers fold overlapping swipes together without reporting each one.
+            if let shown = self.pager?.viewControllers?.first as? PageController, shown !== self.book?.cache[self.current] {
+                self.arrive(at: shown)
+            }
+            self.trimLayouts()
+            self.runQueuedTurns()
+        }
+    }
+
+    private func turn(forward: Bool, tapping: Bool = false) {
+        guard let book else { return }
+        finishHostedTurn()
+        guard !pagerBusy(tapping: tapping) else { queueTurn(forward: forward); return }
         let target = current + (forward ? 1 : -1)
         if book.pages.indices.contains(target) {
             config.onTurn()
             show(target, of: book, forward: forward, animated: config.turn != .none)
-        } else if let neighbour = neighbour(forward: forward) {
+        } else if let neighbour = chapterLayout(book.number + (forward ? 1 : -1)) {
             config.onTurn()
             show(forward ? 0 : neighbour.pages.count - 1, of: neighbour, forward: forward, animated: config.turn != .none)
         } else {
+            queuedTurns = 0
             config.onBoundary(forward)
+        }
+    }
+
+    private func queueTurn(forward: Bool) {
+        queuedTurns = max(-2, min(2, queuedTurns + (forward ? 1 : -1)))
+        guard drain == nil else { return }
+        // Polled rather than left to pager callbacks, which don't all arrive when swipes overlap.
+        drain = Task { @MainActor [weak self] in
+            while true {
+                try? await Task.sleep(for: .milliseconds(80))
+                guard let self else { return }
+                self.runQueuedTurns()
+                if self.queuedTurns == 0 { self.drain = nil; return }
+            }
+        }
+    }
+
+    private func runQueuedTurns() {
+        while queuedTurns != 0, !pagerBusy() {
+            let forward = queuedTurns > 0
+            queuedTurns += forward ? -1 : 1
+            turn(forward: forward)
         }
     }
 
@@ -347,16 +408,19 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         guard layout !== book || index != current else { reportPosition(); return }
         let next = page(index, of: layout)
         if let pager {
-            let direction: UIPageViewController.NavigationDirection = forward ? .forward : .reverse
-            animating = animated
-            pager.setViewControllers([next], direction: direction, animated: animated) { [weak self, weak pager] _ in
-                guard let self else { return }
-                self.animating = false
-                Task { @MainActor in self.refreshPagerIfNeeded() }
-                // Scroll-style pagers keep stale neighbours after an animated set.
-                if animated, self.config.turn == .slide, let pager {
-                    Task { @MainActor in pager.setViewControllers([next], direction: direction, animated: false) }
+            turnSerial += 1
+            let serial = turnSerial
+            if animated {
+                ownTurn = serial
+                pager.view.isUserInteractionEnabled = false // No swipe may start until this turn lands; taps still reach us.
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(1.5))
+                    self?.landed(serial, on: next) // In case UIKit never reports back.
                 }
+            }
+            pager.setViewControllers([next], direction: forward ? .forward : .reverse, animated: animated) { [weak self] _ in
+                // Not from inside the pager's own completion.
+                if animated { Task { @MainActor in self?.landed(serial, on: next) } }
             }
         } else {
             showHosted(next, forward: forward, animated: animated)
@@ -364,30 +428,37 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         arrive(at: next)
     }
 
+    /// Our own animated turn to `page` finished, or was given up on.
+    private func landed(_ serial: Int, on page: PageController) {
+        guard ownTurn == serial, let pager else { return }
+        ownTurn = nil
+        // Scroll-style pagers keep stale neighbours after an animated set.
+        if config.turn == .slide, pager.viewControllers?.first === page {
+            pager.setViewControllers([page], direction: .forward, animated: false)
+        }
+        pager.view.isUserInteractionEnabled = true
+        settle()
+    }
+
     /// Makes the page current, adopting its chapter when the turn crossed into a neighbour.
     private func arrive(at page: PageController) {
         guard let layout = page.layout else { return }
-        let crossed = layout !== book
-        if crossed {
-            let forward = layout === nextLayout
-            if forward { previousLayout = book; nextLayout = nil } else { nextLayout = book; previousLayout = nil }
-            // Until SwiftUI passes the new chapter's neighbours, only the one just left is known.
+        if layout !== book {
+            book = layout
             config.chapter = layout.chapter
             config.chapterIndex = layout.number
-            config.previousChapter = forward ? book?.chapter : nil
-            config.nextChapter = forward ? nil : book?.chapter
-            pagerNeedsRefresh = pager != nil
-            book = layout
             renderedKey?.chapterID = layout.chapter.id
             lastReported = nil
             flash.cancel()
-            config.onChapterTurn(forward)
+            if pager == nil { trimLayouts() } // The pager trims once its turns have landed.
+            config.onChapterTurn(layout.number)
         }
         current = page.index
         reportPosition()
     }
 
     private func showHosted(_ next: PageController, forward: Bool, animated: Bool) {
+        finishHostedTurn()
         let old = hosted
         guard old !== next else { return }
         addChild(next)
@@ -414,15 +485,24 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         moving.layer.shadowRadius = 8
         moving.layer.shadowOffset = CGSize(width: 2, height: 0)
         if !forward { moving.frame.origin.x = -width }
-        animating = true
-        UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseOut) {
-            moving.frame.origin.x = forward ? -width : 0
-        } completion: { [weak self] _ in
+        let slide = UIViewPropertyAnimator(duration: 0.3, curve: .easeOut) { moving.frame.origin.x = forward ? -width : 0 }
+        slide.addCompletion { [weak self] _ in
             moving.layer.shadowOpacity = 0
             moving.frame.origin.x = 0
             finish()
-            self?.animating = false
+            if self?.hostedTurn === slide { self?.hostedTurn = nil }
         }
+        hostedTurn = slide
+        slide.startAnimation()
+    }
+
+    /// Jumps the cover slide in flight to its end; its completion runs before this returns.
+    private func finishHostedTurn() {
+        guard let slide = hostedTurn else { return }
+        hostedTurn = nil
+        guard slide.state == .active else { return }
+        slide.stopAnimation(false)
+        slide.finishAnimation(at: .end)
     }
 
     private func reportPosition() {
@@ -443,25 +523,33 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     func pageViewController(_ pageViewController: UIPageViewController, viewControllerBefore viewController: UIViewController) -> UIViewController? {
         guard let page = viewController as? PageController, let layout = page.layout else { return nil }
         if page.index > 0 { return self.page(page.index - 1, of: layout) }
-        guard layout === book, let previous = neighbour(forward: false) else { return nil }
+        guard let previous = chapterLayout(layout.number - 1) else { return nil }
         return self.page(previous.pages.count - 1, of: previous)
     }
 
     func pageViewController(_ pageViewController: UIPageViewController, viewControllerAfter viewController: UIViewController) -> UIViewController? {
         guard let page = viewController as? PageController, let layout = page.layout else { return nil }
         if page.index + 1 < layout.pages.count { return self.page(page.index + 1, of: layout) }
-        guard layout === book, let next = neighbour(forward: true) else { return nil }
+        guard let next = chapterLayout(layout.number + 1) else { return nil }
         return self.page(0, of: next)
     }
 
     func pageViewController(_ pageViewController: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
+        if config.turn == .curl {
+            swipesInFlight += 1
+            lastSwipeEvent = CACurrentMediaTime()
+        }
         config.onTurn()
     }
 
     func pageViewController(_ pageViewController: UIPageViewController, didFinishAnimating finished: Bool,
                             previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
-        guard completed, let page = pageViewController.viewControllers?.first as? PageController else { return }
-        arrive(at: page)
+        if completed, let page = pageViewController.viewControllers?.first as? PageController { arrive(at: page) }
+        if config.turn == .curl {
+            swipesInFlight = max(0, swipesInFlight - 1)
+            lastSwipeEvent = CACurrentMediaTime()
+        }
+        settle()
     }
 
     // MARK: Tapping
@@ -471,7 +559,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         guard let text = currentTextView else { return false }
         tapFilter.began(touch, in: text)
-        return !animating && !UIAccessibility.isVoiceOverRunning
+        return !UIAccessibility.isVoiceOverRunning
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
@@ -479,9 +567,20 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         true
     }
 
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        ReaderTextTools.isTextMultiTap(otherGestureRecognizer)
+    }
+
     @objc private func tapped(_ gesture: UITapGestureRecognizer) {
         guard gesture.state == .ended, let book, let text = currentTextView, tapFilter.isQuickTap(in: text) else { return }
         guard config.interactive else { config.onTapBlank(); return }
+        let x = gesture.location(in: view).x / max(view.bounds.width, 1)
+        // Mid-turn the page under the finger is still moving: edges queue another turn, anything else is ignored.
+        guard !pagerBusy(tapping: true) else {
+            if x < 0.3 || x > 0.7 { turn(forward: x > 0.7, tapping: true) }
+            return
+        }
         let location = gesture.location(in: text)
         if text.bounds.contains(location) {
             if let target = ReaderTextTools.link(at: location, in: text) {
@@ -495,9 +594,9 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
                 return
             }
         }
-        let x = gesture.location(in: view).x / max(view.bounds.width, 1)
-        if config.edgeTapsTurnPages, x < 0.3 || x > 0.7 {
-            turn(forward: x > 0.7)
+        // Turning also closes the lookup card, so an open card never costs a tap.
+        if x < 0.3 || x > 0.7 {
+            turn(forward: x > 0.7, tapping: true)
         } else {
             config.onTapBlank()
         }

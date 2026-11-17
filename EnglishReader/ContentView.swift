@@ -9,7 +9,10 @@ struct ReaderRoute: Identifiable {
 }
 
 struct ContentView: View {
-    @State private var store = LibraryStore()
+    /// UI tests launch with `-freshLibrary` to start from an empty library of their own, leaving the reader's books
+    /// and places alone.
+    @State private var store = LibraryStore(fileURL: ProcessInfo.processInfo.arguments.contains("-freshLibrary")
+        ? URL.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "library.json") : nil)
     @State private var tab = 0
     @State private var route: ReaderRoute?
 

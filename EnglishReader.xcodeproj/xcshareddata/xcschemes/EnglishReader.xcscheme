@@ -48,6 +48,15 @@
                ReferencedContainer = "container:EnglishReader.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference skipped = "NO" parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "B1B2C3D40000000000000004"
+               BuildableName = "EnglishReaderUITests.xctest"
+               BlueprintName = "EnglishReaderUITests"
+               ReferencedContainer = "container:EnglishReader.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

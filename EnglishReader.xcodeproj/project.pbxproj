@@ -18,11 +18,19 @@
 			remoteGlobalIDString = 2E69B1330A3161295C9DCB01;
 			remoteInfo = EnglishReader;
 		};
+		B1B2C3D40000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8238217991C4C82D1BCE751B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2E69B1330A3161295C9DCB01;
+			remoteInfo = EnglishReader;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A1B2C3D40000000000000002 /* EnglishReaderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EnglishReaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E1D1C645818EB0816572F68E /* EnglishReader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EnglishReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1B2C3D40000000000000002 /* EnglishReaderUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EnglishReaderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -34,6 +42,11 @@
 		A1B2C3D40000000000000003 /* EnglishReaderTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = EnglishReaderTests;
+			sourceTree = "<group>";
+		};
+		B1B2C3D40000000000000003 /* EnglishReaderUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = EnglishReaderUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -55,6 +68,7 @@
 			children = (
 				32FA6C0B59B4A7B42DDCEA33 /* EnglishReader */,
 				A1B2C3D40000000000000003 /* EnglishReaderTests */,
+				B1B2C3D40000000000000003 /* EnglishReaderUITests */,
 				A0906AD77C76E090572F0E63 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -64,6 +78,7 @@
 			children = (
 				E1D1C645818EB0816572F68E /* EnglishReader.app */,
 				A1B2C3D40000000000000002 /* EnglishReaderTests.xctest */,
+				B1B2C3D40000000000000002 /* EnglishReaderUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -114,6 +129,26 @@
 			productReference = A1B2C3D40000000000000002 /* EnglishReaderTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		B1B2C3D40000000000000004 /* EnglishReaderUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B1B2C3D40000000000000005 /* Build configuration list for PBXNativeTarget "EnglishReaderUITests" */;
+			buildPhases = (
+				B1B2C3D40000000000000006 /* Sources */,
+				B1B2C3D4000000000000000A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B1B2C3D40000000000000007 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				B1B2C3D40000000000000003 /* EnglishReaderUITests */,
+			);
+			name = EnglishReaderUITests;
+			productName = EnglishReaderUITests;
+			productReference = B1B2C3D40000000000000002 /* EnglishReaderUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -127,6 +162,9 @@
 						ProvisioningStyle = Automatic;
 					};
 					A1B2C3D40000000000000004 = {
+						TestTargetID = 2E69B1330A3161295C9DCB01;
+					};
+					B1B2C3D40000000000000004 = {
 						TestTargetID = 2E69B1330A3161295C9DCB01;
 					};
 				};
@@ -150,6 +188,7 @@
 			targets = (
 				2E69B1330A3161295C9DCB01 /* EnglishReader */,
 				A1B2C3D40000000000000004 /* EnglishReaderTests */,
+				B1B2C3D40000000000000004 /* EnglishReaderUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -163,6 +202,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		C10000000000000000000005 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B1B2C3D4000000000000000A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -186,6 +232,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B1B2C3D40000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -193,6 +246,11 @@
 			isa = PBXTargetDependency;
 			target = 2E69B1330A3161295C9DCB01 /* EnglishReader */;
 			targetProxy = A1B2C3D40000000000000001 /* PBXContainerItemProxy */;
+		};
+		B1B2C3D40000000000000007 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2E69B1330A3161295C9DCB01 /* EnglishReader */;
+			targetProxy = B1B2C3D40000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -388,6 +446,26 @@
 			};
 			name = Release;
 		};
+		B1B2C3D40000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.reader-m7k2.uitests";
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = EnglishReader;
+			};
+			name = Debug;
+		};
+		B1B2C3D40000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.inp146.reader-m7k2.uitests";
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = EnglishReader;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -414,6 +492,15 @@
 			buildConfigurations = (
 				A1B2C3D40000000000000008 /* Debug */,
 				A1B2C3D40000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B1B2C3D40000000000000005 /* Build configuration list for PBXNativeTarget "EnglishReaderUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B1B2C3D40000000000000008 /* Debug */,
+				B1B2C3D40000000000000009 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

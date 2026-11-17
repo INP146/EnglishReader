@@ -15,6 +15,7 @@ iOS 英文阅读器（SwiftUI，iOS 26，Xcode 26.3+）。离线 EPUB/TXT 导入
   - `WordDictionary.swift` 读取 `Resources/dictionary.sqlite`
   - `Theme.swift` 颜色（自动适配深色）
 - `EnglishReaderTests/` 单元测试（`Fixtures/alice.epub` 为真实 Gutenberg EPUB）
+- `EnglishReaderUITests/` UI 测试：`PagingUITests.m` 在仿真/平移/覆盖模式下连发快速滑动和点按（重叠的手势，跨章节），每轮后要求正常翻页逐页落地。用 XCUIAutomation 的私有事件合成（`XCSynthesizedEventRecord`），因为 XCUIElement 的手势会等应用空闲、无法重叠；该 API 不可用时测试会跳过。应用侧钩子：启动参数 `-freshLibrary` 使用临时空书库；分页正文的 `accessibilityIdentifier` 为 `page 章/总章 页/本章总页`
 - `Tools/build-dictionary.py` 从 ECDICT CSV 重建词典：`python3 -I Tools/build-dictionary.py ecdict.csv EnglishReader/Resources/dictionary.sqlite`
 - `docs/screenshots/` 模拟器截图
 
@@ -24,13 +25,17 @@ iOS 英文阅读器（SwiftUI，iOS 26，Xcode 26.3+）。离线 EPUB/TXT 导入
 xcodebuild -project EnglishReader.xcodeproj -scheme EnglishReader \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 
-# 测试
+# 测试（单元测试 + UI 测试，UI 测试约 2 分钟）
 xcodebuild -project EnglishReader.xcodeproj -scheme EnglishReader \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+
+# 只跑单元测试（快速迭代时）
+xcodebuild -project EnglishReader.xcodeproj -scheme EnglishReader \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test -only-testing:EnglishReaderTests
 ```
 真机构建需在 Xcode 中为 target 设置 Development Team（项目未写死 Team）；没有开发者账号时，用外部工具 `iosign install`（`~/Projects/iosign`）以第三方证书重签安装。Bundle ID：`com.inp146.reader-m7k2`。
 
 ## 约定
 - 界面文案为中文，放在 `Localizable.xcstrings`。
-- 改动后跑完整测试；涉及导入/渲染时注意“渲染字符串与正文逐字一致”的测试。
+- 改动后跑完整测试；涉及导入/渲染时注意“渲染字符串与正文逐字一致”的测试；改动分页/翻页时必须跑 UI 测试。
 - `MadeWithAirBuild.swift` 及同名图片集是 AirBuild 署名（设置页底部）；如需移除，删除该文件、图片集及 `ReaderView.swift` 中的使用处。

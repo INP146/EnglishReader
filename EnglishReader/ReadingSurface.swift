@@ -417,6 +417,11 @@ struct ReadingSurface: UIViewRepresentable {
             true // UITextView's own selection recognizers keep working.
         }
 
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            ReaderTextTools.isTextMultiTap(otherGestureRecognizer)
+        }
+
         @objc private func tapped(_ gesture: UITapGestureRecognizer) {
             guard gesture.state == .ended, let view = textView, tapFilter.isQuickTap(in: view) else { return }
             guard parent.interactive else { parent.onTapBlank(); return }
@@ -490,6 +495,14 @@ struct ReadingSurface: UIViewRepresentable {
 /// view whose storage holds the whole chapter text.
 @MainActor
 enum ReaderTextTools {
+    /// UITextView's double tap, which selects a word. Reading taps take precedence over it, so a quick second
+    /// tap on a word looks it up again instead of leaving a selection the next tap would only clear.
+    /// Long-press selection is unaffected.
+    static func isTextMultiTap(_ recognizer: UIGestureRecognizer) -> Bool {
+        guard let tap = recognizer as? UITapGestureRecognizer, tap.numberOfTapsRequired > 1 else { return false }
+        return tap.view is UITextView
+    }
+
     /// The character under a point, or nil in margins, paragraph gaps and below the last line.
     static func characterIndex(at location: CGPoint, in view: UITextView) -> Int? {
         guard view.textStorage.length > 0 else { return nil }
