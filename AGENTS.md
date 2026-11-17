@@ -37,7 +37,12 @@ xcodebuild -project EnglishReader.xcodeproj -scheme EnglishReader \
 
 ## 约定
 - 界面文案为中文，放在 `Localizable.xcstrings`。
-- 改动后跑完整测试；涉及导入/渲染时注意“渲染字符串与正文逐字一致”的测试；改动分页/翻页或选词查词时必须跑 UI 测试。
+- 测试按改动范围分级，提交前（或一组改动收尾时）跑一次完整测试：
+  - 不碰正文的界面改动（文案、颜色、设置面板、生词本界面等）：构建或单元测试即可
+  - 导入/章节构建/持久化/词典：单元测试；涉及导入/渲染时注意“渲染字符串与正文逐字一致”的测试
+  - 分页/翻页：单元测试 + `-only-testing:EnglishReaderUITests/PagingUITests`
+  - 选词/查词：单元测试 + `-only-testing:EnglishReaderUITests/SelectionUITests`
+  - 反复迭代时可先 `build-for-testing`，再用 `test-without-building -only-testing:...` 省去编译；修某个失败用例时先只跑该用例（如 `.../SelectionUITests/testCurl`）
 - `MadeWithAirBuild.swift` 及同名图片集是 AirBuild 署名（设置页底部）；如需移除，删除该文件、图片集及 `ReaderView.swift` 中的使用处。
 
 ## 设计原则（教训）

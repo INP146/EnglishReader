@@ -42,7 +42,8 @@ struct ReadingSurface: UIViewRepresentable {
     /// The selection went away.
     var onDeselect: () -> Void
     var onSave: (ReadingSelection) -> Void
-    /// True while the lookup card is up; the looked-up text stays selected until it closes.
+    /// True while the lookup card is up; the looked-up text stays selected until it closes, and like the toolbars,
+    /// the card turns taps into closing it.
     var lookingUp = false
     /// False while the toolbars are up: taps only dismiss them, and words can't be looked up or selected.
     var interactive = true
@@ -433,8 +434,12 @@ struct ReadingSurface: UIViewRepresentable {
 
         @objc private func tapped(_ gesture: UITapGestureRecognizer) {
             guard gesture.state == .ended, let view = textView, tapFilter.isQuick else { return }
-            // A tap on the selection itself would only bring back the edit menu; any tap lets go of it instead.
-            if tapFilter.beganWithSelection { selectionLookup.deselect(); return }
+            // Like the toolbars, the card (or a selection on its way to one) masks the page: a tap only closes it.
+            if tapFilter.beganWithSelection || parent.lookingUp {
+                selectionLookup.deselect()
+                parent.onDeselect()
+                return
+            }
             guard view.selectedRange.length == 0 else { return } // The second tap of a double tap selected a word.
             guard parent.interactive else { parent.onTapBlank(); return }
             let location = gesture.location(in: view)

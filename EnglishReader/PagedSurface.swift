@@ -24,7 +24,8 @@ struct PagedSurface: UIViewControllerRepresentable {
     var jump: JumpRequest?
     /// Words still being learned; every occurrence gets a dotted underline.
     var learningForms: Set<String>
-    /// True while the lookup card is up; the looked-up text stays selected until it closes.
+    /// True while the lookup card is up; the looked-up text stays selected until it closes, and like the toolbars,
+    /// the card turns taps into closing it.
     var lookingUp: Bool
     /// False while the toolbars are up: taps only dismiss them, and words can't be looked up or selected.
     var interactive: Bool
@@ -586,11 +587,11 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         guard gesture.state == .ended, let text = currentTextView, tapFilter.isQuick else { return }
         let x = gesture.location(in: view).x / max(view.bounds.width, 1)
         let edge = x < 0.3 || x > 0.7
-        if tapFilter.beganWithSelection {
-            // A tap on the selection itself would only bring back the edit menu; any tap lets go of it instead.
-            // At an edge it turns too, so an open card never costs a tap.
+        if tapFilter.beganWithSelection || config.lookingUp {
+            // Like the toolbars, the card (or a selection on its way to one) masks the page: a tap only closes it.
             selectionLookup.deselect()
-            guard edge else { return }
+            config.onDeselect()
+            return
         } else if text.selectedRange.length > 0 {
             return // The second tap of a double tap selected a word.
         }
