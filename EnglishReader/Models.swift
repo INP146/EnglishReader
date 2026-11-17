@@ -4,6 +4,9 @@ struct ReadingPosition: Codable, Equatable, Sendable {
     var chapter: Int = 0
     /// UTF-16 offset in ReaderChapter.text (the same coordinate system as NSRange).
     var offset: Int = 0
+    /// How far through the chapter the reader has seen, 0...1: the bottom of the last page or screen,
+    /// where `offset` marks its top. Absent in positions saved before it was recorded.
+    var fraction: Double?
 }
 
 /// A styled span of chapter text, in UTF-16 offsets.
@@ -83,7 +86,9 @@ struct ReaderBook: Codable, Identifiable, Equatable, Sendable {
         let chapter = min(max(position.chapter, 0), chapters.count - 1)
         let total = chapters.reduce(0) { $0 + $1.length }
         let before = chapters.prefix(chapter).reduce(0) { $0 + $1.length }
-        return min(1, Double(before + position.offset) / Double(max(total, 1)))
+        // The offset is the top of the screen, so on the last page it alone never reaches the end.
+        let seen = max(Double(position.offset), (position.fraction ?? 0) * Double(chapters[chapter].length))
+        return min(1, (Double(before) + seen) / Double(max(total, 1)))
     }
 
     var canExport: Bool { hasPackage == true }

@@ -203,9 +203,10 @@ final class LibraryStore {
 
     // MARK: Reading position
 
-    func savePosition(bookID: UUID, chapter: Int, offset: Int) {
+    func savePosition(bookID: UUID, chapter: Int, offset: Int, fraction: Double? = nil) {
         guard let index = books.firstIndex(where: { $0.id == bookID }), books[index].chapters.indices.contains(chapter) else { return }
-        let position = ReadingPosition(chapter: chapter, offset: max(0, min(offset, books[index].chapters[chapter].length)))
+        let position = ReadingPosition(chapter: chapter, offset: max(0, min(offset, books[index].chapters[chapter].length)),
+                                       fraction: fraction.map { min(1, max(0, $0)) })
         guard books[index].position != position else { return }
         books[index].position = position
         pendingPositionSave?.cancel()

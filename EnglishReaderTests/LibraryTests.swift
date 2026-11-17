@@ -68,6 +68,13 @@ struct LibraryTests {
         let id = try await store.importBook(url: source)
         store.savePosition(bookID: id, chapter: 0, offset: Int.max)
         #expect(store.books.first?.position.offset == text.utf16.count)
+        // The last page starts before the end of the text; having seen all of it still finishes the book.
+        store.savePosition(bookID: id, chapter: 0, offset: 10, fraction: 0.5)
+        #expect(store.books.first?.isFinished == false)
+        store.savePosition(bookID: id, chapter: 0, offset: 10, fraction: 1)
+        #expect(store.books.first?.isFinished == true)
+        #expect(store.books.first?.percentRead == 100)
+        store.savePosition(bookID: id, chapter: 0, offset: Int.max)
         store.persist()
         let reopened = LibraryStore(fileURL: file)
         #expect(reopened.books.first?.position.offset == text.utf16.count)

@@ -386,7 +386,7 @@ struct ReaderView: View {
             Spacer()
             Button("从这里继续读") {
                 savedPlace = nil
-                store.savePosition(bookID: bookID, chapter: chapter, offset: offset)
+                store.savePosition(bookID: bookID, chapter: chapter, offset: offset, fraction: fraction)
             }
         }
         .font(.subheadline)
@@ -455,7 +455,7 @@ struct ReaderView: View {
     private func positionChanged(_ value: Int, _ fraction: Double) {
         offset = value
         self.fraction = fraction
-        if savedPlace == nil { store.savePosition(bookID: bookID, chapter: chapter, offset: value) }
+        if savedPlace == nil { store.savePosition(bookID: bookID, chapter: chapter, offset: value, fraction: fraction) }
     }
 
     /// `atEnd` opens the chapter at its last page, for turning back across a chapter boundary.
@@ -466,13 +466,13 @@ struct ReaderView: View {
         offset = atEnd ? max(0, (current?.text.utf16.count ?? 1) - 1) : 0
         fraction = atEnd ? 1 : 0
         jump = nil
-        if savedPlace == nil { store.savePosition(bookID: bookID, chapter: index, offset: offset) }
+        if savedPlace == nil { store.savePosition(bookID: bookID, chapter: index, offset: offset, fraction: fraction) }
     }
 
     /// Opens a search result, keeping the reader's own place to come back to.
     private func visit(chapter index: Int, offset value: Int) {
         guard content?.chapters.indices.contains(index) == true else { return }
-        if savedPlace == nil { savedPlace = ReadingPosition(chapter: chapter, offset: offset) }
+        if savedPlace == nil { savedPlace = ReadingPosition(chapter: chapter, offset: offset, fraction: fraction) }
         lookup = nil
         chapter = index
         offset = value
@@ -522,6 +522,7 @@ struct ReaderView: View {
         } else {
             chapter = place.chapter
             offset = place.offset
+            fraction = place.fraction ?? 0
             jump = nil
         }
     }
@@ -562,7 +563,7 @@ struct ReaderView: View {
     }
 
     private func close() {
-        if savedPlace == nil { store.savePosition(bookID: bookID, chapter: chapter, offset: offset) }
+        if savedPlace == nil { store.savePosition(bookID: bookID, chapter: chapter, offset: offset, fraction: fraction) }
         store.persist()
         dismiss()
     }
