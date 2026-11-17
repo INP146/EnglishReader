@@ -1,11 +1,12 @@
 import SwiftUI
 import UIKit
 
-/// Page-by-page reading. One layout manager lays a whole chapter into a
-/// chain of page-sized text containers; each page's text view shows one
-/// container, so offsets, hit-testing and the edit menu use the same chapter
-/// coordinates as the scrolling surface. The neighbouring chapters are laid
-/// out too, so turning across a chapter boundary is an ordinary page turn.
+/// Page-by-page reading. Each page lays out the text from where the page
+/// before it ended in a page-sized container; what fits is the page, and that
+/// same layout is what it shows, so pagination and display can't disagree.
+/// Selections are reported in the same chapter coordinates as the scrolling
+/// surface. The neighbouring chapters are laid out too, so turning across a
+/// chapter boundary is an ordinary page turn.
 @MainActor
 struct PagedSurface: UIViewControllerRepresentable {
     var chapter: ReaderChapter
@@ -23,17 +24,19 @@ struct PagedSurface: UIViewControllerRepresentable {
     var jump: JumpRequest?
     /// Words still being learned; every occurrence gets a dotted underline.
     var learningForms: Set<String>
-    /// True while the lookup card is up; the looked-up word stays highlighted until it closes.
+    /// True while the lookup card is up; the looked-up text stays selected until it closes.
     var lookingUp: Bool
     /// False while the toolbars are up: taps only dismiss them, and words can't be looked up or selected.
     var interactive: Bool
     /// Seconds per page while auto reading.
     var autoTurnInterval: Double?
     var onPosition: (_ offset: Int, _ fraction: Double) -> Void
-    var onTapWord: (ReadingSelection) -> Void
     var onTapBlank: () -> Void
     var onTurn: () -> Void
+    /// The selection settled on a word or phrase; long press and double tap both select.
     var onLookup: (ReadingSelection) -> Void
+    /// The selection went away.
+    var onDeselect: () -> Void
     var onSave: (ReadingSelection) -> Void
     /// A page turn carried reading into another chapter, which this surface now shows.
     var onChapterTurn: (_ index: Int) -> Void
@@ -51,46 +54,46 @@ struct PagedSurface: UIViewControllerRepresentable {
     static func dismantleUIViewController(_ controller: PagerController, coordinator: ()) { controller.stopAutoTurn() }
 }
 
-/// One chapter laid out into page-sized text containers.
+/// One chapter laid out page by page.
 @MainActor
 final class PagedChapter {
     let chapter: ReaderChapter
     let number: Int
-    let storage: NSTextStorage
-    let manager = NSLayoutManager()
-    private(set) var containers: [NSTextContainer] = []
-    private(set) var pages: [NSRange] = []
+    /// The chapter's text, shared by its pages for the sentences around selections.
+    let text: NSString
+    private(set) var layouts: [PageLayout] = []
     let wordRanges: [NSRange]
     var marked: [NSRange] = []
     var cache: [Int: PageController] = [:]
+
+    var pages: [NSRange] { layouts.map(\.range) }
 
     init(_ chapter: ReaderChapter, number: Int, size: CGFloat, layout: ReaderLayout, ink: UIColor, pageSize: CGSize, forms: Set<String>,
          resources: URL?) {
         self.chapter = chapter
         self.number = number
-        storage = NSTextStorage(attributedString: ReadingSurface.attributedText(for: chapter, size: size, layout: layout, ink: ink,
-                                                                                resources: resources))
-        storage.addLayoutManager(manager)
+        text = chapter.text as NSString
         wordRanges = ReadingSurface.englishWordRanges(in: chapter.text)
-        var end = 0
+        let full = NSTextStorage(attributedString: ReadingSurface.attributedText(for: chapter, size: size, layout: layout,
+                                                                                             ink: ink, resources: resources))
+        marked = ReaderTextTools.markedRanges(in: chapter.text, words: wordRanges, forms: forms)
+        ReaderTextTools.applyMarks(marked, replacing: [], in: full)
+        // Each page is handed some text past what it can hold; a generous first guess saves laying out twice.
+        let guess = max(500, Int(pageSize.width * pageSize.height / (size * size * 0.25)))
+        var start = 0
         repeat {
-            let container = NSTextContainer(size: pageSize)
-            container.lineFragmentPadding = 0
-            manager.addTextContainer(container)
-            let glyphs = manager.glyphRange(for: container)
+            let page = PageLayout(text: full, from: start, guess: guess, size: pageSize)
             // A line taller than the page can never be placed; stop rather than loop.
-            guard glyphs.length > 0 || containers.isEmpty else { manager.removeTextContainer(at: containers.count); break }
-            containers.append(container)
-            pages.append(manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil))
-            end = NSMaxRange(glyphs)
-        } while end < manager.numberOfGlyphs
-        applyMarks(forms)
+            guard page.range.length > 0 || layouts.isEmpty else { break }
+            layouts.append(page)
+            start = NSMaxRange(page.range)
+        } while start < full.length
     }
 
     func applyMarks(_ forms: Set<String>) {
         let ranges = ReaderTextTools.markedRanges(in: chapter.text, words: wordRanges, forms: forms)
         guard ranges != marked else { return }
-        ReaderTextTools.applyMarks(ranges, replacing: marked, in: storage)
+        for page in layouts { page.applyMarks(ranges, replacing: marked) }
         marked = ranges
     }
 
@@ -113,6 +116,8 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     private var lastJumpID: UUID?
     private var lastReported: Int?
     private var tapFilter = TapFilter()
+    private let blankTap = DeferredTap()
+    private let selectionLookup = SelectionLookup()
     private let flash = WordFlash()
     private var pager: UIPageViewController?
     /// Cover and no-animation modes show one page here and animate by hand.
@@ -160,7 +165,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
             pager.isDoubleSided = false
             pager.dataSource = self
             pager.delegate = self
-            // Taps are ours: words get looked up, edges turn pages.
+            // Taps are ours: edges turn pages, the middle shows the toolbars.
             pager.gestureRecognizers.filter { $0 is UITapGestureRecognizer }.forEach { $0.isEnabled = false }
             addChild(pager)
             pager.view.frame = view.bounds
@@ -183,6 +188,14 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         tap.cancelsTouchesInView = false
         tap.delegate = self
         view.addGestureRecognizer(tap)
+        selectionLookup.look = { [weak self] value, text in
+            guard let self else { return }
+            // A page turned away meanwhile keeps no selection behind.
+            guard text === self.currentTextView, !self.pagerBusy() else { self.selectionLookup.dismiss(); return }
+            self.config.onLookup(value)
+        }
+        selectionLookup.clear = { [weak self] in self?.config.onDeselect() }
+        view.addGestureRecognizer(selectionLookup.fingers)
     }
 
     override func viewDidLayoutSubviews() {
@@ -193,7 +206,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     func update(_ value: PagedSurface) {
         let old = config
         config = value
-        if old.lookingUp && !value.lookingUp { flash.cancel() }
+        if old.lookingUp && !value.lookingUp { selectionLookup.dismiss() }
         if old.backdrop != value.backdrop || old.backdropVersion != value.backdropVersion {
             for page in laidOut.values.flatMap(\.cache.values) { page.backdrop.backdrop = value.backdrop; page.backdrop.refresh() }
         }
@@ -210,10 +223,9 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         if let jump = pendingJump, let book {
             pendingJump = nil
             show(book.pageIndex(containing: jump.offset), of: book, forward: true, animated: false)
-            if jump.highlight {
-                let range = ReaderTextTools.wordRange(containing: jump.offset, in: book.wordRanges)
-                    ?? NSRange(location: min(jump.offset, max(0, book.storage.length - 1)), length: book.storage.length > 0 ? 1 : 0)
-                flash.show(range, in: book.storage)
+            if jump.highlight, let text = currentTextView as? PageTextView {
+                let range = ReaderTextTools.wordRange(containing: jump.offset, in: book.wordRanges) ?? NSRange(location: jump.offset, length: 1)
+                if let local = text.page.local(range) { flash.show(local, in: text.textStorage) }
             }
         }
         if value.autoTurnInterval != autoTurn?.interval { restartAutoTurn() }
@@ -303,8 +315,8 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         page.header.textColor = secondary
         page.footer.textColor = secondary
         page.progress.textColor = secondary
-        if layout.containers.indices.contains(index) {
-            let text = UITextView(frame: textFrame, textContainer: layout.containers[index])
+        if layout.pages.indices.contains(index) {
+            let text = PageTextView(page: layout.layouts[index], chapterText: layout.text, frame: textFrame)
             text.isEditable = false
             text.isSelectable = config.interactive
             text.isScrollEnabled = false
@@ -313,7 +325,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
             text.tintColor = .readerAccent
             text.dataDetectorTypes = []
             text.delegate = self
-            text.accessibilityHint = "可用辅助功能操作选择单词、查词或收藏。"
+            text.accessibilityHint = "选中单词或词组即可查词；也可用辅助功能操作选择单词、查词或收藏。"
             // For UI tests: "page 2/3 4/12" is page 4 of 12 in chapter 2 of 3.
             text.accessibilityIdentifier = "page \(layout.number + 1)/\(max(config.chapterCount, 1)) \(index + 1)/\(layout.pages.count)"
             page.textView = text
@@ -368,6 +380,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         guard let book else { return }
         finishHostedTurn()
         guard !pagerBusy(tapping: tapping) else { queueTurn(forward: forward); return }
+        selectionLookup.dismiss()
         let target = current + (forward ? 1 : -1)
         if book.pages.indices.contains(target) {
             config.onTurn()
@@ -539,6 +552,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
             swipesInFlight += 1
             lastSwipeEvent = CACurrentMediaTime()
         }
+        selectionLookup.dismiss()
         config.onTurn()
     }
 
@@ -559,6 +573,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         guard let text = currentTextView else { return false }
         tapFilter.began(touch, in: text)
+        blankTap.touchBegan()
         return !UIAccessibility.isVoiceOverRunning
     }
 
@@ -567,48 +582,45 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
         true
     }
 
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                           shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        ReaderTextTools.isTextMultiTap(otherGestureRecognizer)
-    }
-
     @objc private func tapped(_ gesture: UITapGestureRecognizer) {
-        guard gesture.state == .ended, let book, let text = currentTextView, tapFilter.isQuickTap(in: text) else { return }
-        guard config.interactive else { config.onTapBlank(); return }
+        guard gesture.state == .ended, let text = currentTextView, tapFilter.isQuick else { return }
         let x = gesture.location(in: view).x / max(view.bounds.width, 1)
+        let edge = x < 0.3 || x > 0.7
+        if tapFilter.beganWithSelection {
+            // A tap on the selection itself would only bring back the edit menu; any tap lets go of it instead.
+            // At an edge it turns too, so an open card never costs a tap.
+            selectionLookup.deselect()
+            guard edge else { return }
+        } else if text.selectedRange.length > 0 {
+            return // The second tap of a double tap selected a word.
+        }
+        guard config.interactive else { config.onTapBlank(); return }
         // Mid-turn the page under the finger is still moving: edges queue another turn, anything else is ignored.
         guard !pagerBusy(tapping: true) else {
-            if x < 0.3 || x > 0.7 { turn(forward: x > 0.7, tapping: true) }
+            if edge { turn(forward: x > 0.7, tapping: true) }
             return
         }
         let location = gesture.location(in: text)
-        if text.bounds.contains(location) {
-            if let target = ReaderTextTools.link(at: location, in: text) {
-                config.onTapLink(target)
-                return
-            }
-            if let range = ReaderTextTools.wordRange(at: location, in: text, words: book.wordRanges),
-               let selection = ReaderTextTools.selection(for: range, in: text) {
-                flash.show(range, in: book.storage, hold: true)
-                config.onTapWord(selection)
-                return
-            }
-        }
-        // Turning also closes the lookup card, so an open card never costs a tap.
-        if x < 0.3 || x > 0.7 {
-            turn(forward: x > 0.7, tapping: true)
+        if text.bounds.contains(location), let target = ReaderTextTools.link(at: location, in: text) {
+            config.onTapLink(target)
+        } else if edge {
+            turn(forward: x > 0.7, tapping: true) // Turning also closes the lookup card.
         } else {
-            config.onTapBlank()
+            blankTap.run { [weak self, weak text] in
+                guard let self, let text, text.selectedRange.length == 0 else { return }
+                self.config.onTapBlank()
+            }
         }
     }
 
+    // Selecting is looking up: long press or double tap a word, drag the handles to widen it to a phrase.
+    func textViewDidChangeSelection(_ textView: UITextView) {
+        selectionLookup.changed(in: textView)
+    }
+
+    // The lookup card offers what the edit menu would.
     func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
-        ReaderTextTools.editMenu(for: range, in: textView, suggestedActions: suggestedActions,
-                                 onLookup: { [weak self, weak textView] value in
-                                     if let textView { self?.flash.show(value.range, in: textView.textStorage, hold: true) }
-                                     self?.config.onLookup(value)
-                                 },
-                                 onSave: { [weak self] in self?.config.onSave($0) })
+        ReaderTextTools.noEditMenu
     }
 
     // MARK: Auto reading
@@ -627,6 +639,8 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
     }
 
     func stopAutoTurn() {
+        blankTap.cancel()
+        selectionLookup.cancel()
         autoTurn?.task.cancel()
         autoTurn = nil
     }
@@ -636,8 +650,6 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
 final class PageController: UIViewController {
     let index: Int
     private(set) weak var layout: PagedChapter?
-    /// The storage owns the layout manager and containers the text view draws from.
-    private let storage: NSTextStorage
     let backdrop = BackdropView()
     let header = UILabel()
     let footer = UILabel()
@@ -649,7 +661,6 @@ final class PageController: UIViewController {
     init(index: Int, layout: PagedChapter) {
         self.index = index
         self.layout = layout
-        storage = layout.storage
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -678,4 +689,76 @@ final class PageController: UIViewController {
         footer.frame = footerFrame()
         progress.frame = footer.frame
     }
+}
+
+/// One page's text, laid out alone in a page-sized container: what fits is the page. It holds some text past the page
+/// so the last line breaks as it would in the whole chapter; the container just never shows it.
+@MainActor
+final class PageLayout {
+    /// The page's part of the chapter.
+    let range: NSRange
+    let container: NSTextContainer
+    /// Containers don't keep their layout manager or its storage.
+    private let storage: NSTextStorage
+
+    init(text: NSAttributedString, from start: Int, guess: Int, size: CGSize) {
+        let string = text.string as NSString
+        var length = guess
+        while true {
+            // End the excerpt at a space, so no word is cut short where a line might break.
+            var end = min(string.length, start + length)
+            if end < string.length {
+                let space = string.rangeOfCharacter(from: .whitespacesAndNewlines, range: NSRange(location: end, length: string.length - end))
+                end = space.location == NSNotFound ? string.length : space.location
+            }
+            let storage = NSTextStorage(attributedString: text.attributedSubstring(from: NSRange(location: start, length: end - start)))
+            let manager = NSLayoutManager()
+            storage.addLayoutManager(manager)
+            let container = NSTextContainer(size: size)
+            container.lineFragmentPadding = 0
+            manager.addTextContainer(container)
+            let fits = manager.characterRange(forGlyphRange: manager.glyphRange(for: container), actualGlyphRange: nil).length
+            // Filling the whole excerpt means more might have fitted, unless it ran to the end of the chapter.
+            if fits < storage.length || end == string.length {
+                range = NSRange(location: start, length: fits)
+                self.container = container
+                self.storage = storage
+                return
+            }
+            length *= 2
+        }
+    }
+
+    /// The part of a chapter range on this page, in the page's own text; nil when none of it is.
+    func local(_ range: NSRange) -> NSRange? {
+        let part = NSIntersectionRange(range, self.range)
+        return part.length > 0 ? NSRange(location: part.location - self.range.location, length: part.length) : nil
+    }
+
+    func applyMarks(_ ranges: [NSRange], replacing old: [NSRange]) {
+        // The text held past the page too, should it ever be laid out.
+        let held = NSRange(location: range.location, length: storage.length)
+        func local(_ range: NSRange) -> NSRange? {
+            let part = NSIntersectionRange(range, held)
+            return part.length > 0 ? NSRange(location: part.location - held.location, length: part.length) : nil
+        }
+        ReaderTextTools.applyMarks(ranges.compactMap(local), replacing: old.compactMap(local), in: storage)
+    }
+}
+
+/// Shows one page's own layout. UIKit lets only the first text container of a layout manager be selected, which is
+/// why every page has a layout of its own.
+final class PageTextView: UITextView {
+    let page: PageLayout
+    /// The whole chapter, so a selection's sentence can run on across pages.
+    let chapterText: NSString
+
+    @MainActor
+    init(page: PageLayout, chapterText: NSString, frame: CGRect) {
+        self.page = page
+        self.chapterText = chapterText
+        super.init(frame: frame, textContainer: page.container)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }

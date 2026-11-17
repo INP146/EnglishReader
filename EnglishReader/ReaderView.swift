@@ -1,4 +1,5 @@
 import SwiftUI
+import Translation
 import UIKit
 
 struct ReaderView: View {
@@ -167,10 +168,10 @@ struct ReaderView: View {
                 interactive: !chromeVisible,
                 autoTurnInterval: autoRunning ? Double(34 - 3 * autoSpeed) : nil,
                 onPosition: positionChanged,
-                onTapWord: { show($0) },
                 onTapBlank: { tappedBlank() },
                 onTurn: { lookup = nil; hideChrome() },
                 onLookup: { show($0) },
+                onDeselect: { lookup = nil },
                 onSave: { save($0) },
                 onChapterTurn: { index in
                     // The surface already shows the new chapter; its position report follows.
@@ -189,10 +190,10 @@ struct ReaderView: View {
                     chapter: current, layout: layout, palette: palette, initialOffset: offset, jump: jump, markedRanges: marks,
                     autoScrollSpeed: autoRunning ? Double(8 + 8 * autoSpeed) : nil,
                     onPosition: positionChanged,
-                    onTapWord: { show($0) },
                     onTapBlank: { tappedBlank() },
                     onScroll: { lookup = nil },
                     onLookup: { show($0) },
+                    onDeselect: { lookup = nil },
                     onSave: { save($0) },
                     lookingUp: lookup != nil,
                     interactive: !chromeVisible,
@@ -408,8 +409,8 @@ struct ReaderView: View {
 
     private var tip: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "hand.tap").foregroundStyle(Color.accent)
-            Text("点单词看释义，长按可选词组。点空白处隐藏工具栏。").font(.footnote)
+            Image(systemName: "hand.point.up.left").foregroundStyle(Color.accent)
+            Text("长按或双击单词看释义，拖动选区可查词组。轻点隐藏工具栏。").font(.footnote)
             Button { tipSeen = true } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)) }
                 .accessibilityLabel("关闭提示")
         }
@@ -616,6 +617,8 @@ struct LookupCard: View {
     var onSave: () -> Void
     var onMore: () -> Void
     var onClose: () -> Void
+    @State private var translating = false
+    @State private var copied = false
 
     private var isLikelyName: Bool {
         guard let first = selection.text.first, first.isUppercase else { return false }
@@ -668,7 +671,28 @@ struct LookupCard: View {
                 .accessibilityIdentifier("lookup-dictionary")
             }
             .controlSize(.regular)
+            // What the edit menu offered, which the card replaces.
+            HStack(spacing: 0) {
+                Button {
+                    UIPasteboard.general.string = selection.text
+                    copied = true
+                } label: {
+                    Label(copied ? "已拷贝" : "拷贝", systemImage: copied ? "checkmark" : "doc.on.doc").frame(maxWidth: .infinity)
+                }
+                .accessibilityIdentifier("copy-selection")
+                Button { translating = true } label: {
+                    Label("翻译", systemImage: "translate").frame(maxWidth: .infinity)
+                }
+                .accessibilityIdentifier("translate-selection")
+                ShareLink(item: selection.text) {
+                    Label("分享", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
+                }
+                .accessibilityIdentifier("share-selection")
+            }
+            .font(.subheadline)
+            .buttonStyle(.borderless)
         }
+        .translationPresentation(isPresented: $translating, text: selection.text)
         .padding(16)
         .background(Color(uiColor: palette.chrome), in: RoundedRectangle(cornerRadius: 20))
         .tint(.accent)

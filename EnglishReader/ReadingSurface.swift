@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// What the reader picked: a tapped word or a selected phrase, with its sentence.
+/// What the reader picked: a selected word or phrase, with its sentence.
 /// Offsets use UTF-16 positions in ReaderChapter.text.
 struct ReadingSelection: Identifiable, Equatable {
     let id = UUID()
@@ -35,12 +35,14 @@ struct ReadingSurface: UIViewRepresentable {
     /// Points per second while auto reading; nil when not scrolling by itself.
     var autoScrollSpeed: Double?
     var onPosition: (_ offset: Int, _ fraction: Double) -> Void
-    var onTapWord: (ReadingSelection) -> Void
     var onTapBlank: () -> Void
     var onScroll: () -> Void
+    /// The selection settled on a word or phrase; long press and double tap both select.
     var onLookup: (ReadingSelection) -> Void
+    /// The selection went away.
+    var onDeselect: () -> Void
     var onSave: (ReadingSelection) -> Void
-    /// True while the lookup card is up; the looked-up word stays highlighted until it closes.
+    /// True while the lookup card is up; the looked-up text stays selected until it closes.
     var lookingUp = false
     /// False while the toolbars are up: taps only dismiss them, and words can't be looked up or selected.
     var interactive = true
@@ -158,7 +160,7 @@ struct ReadingSurface: UIViewRepresentable {
         view.contentInsetAdjustmentBehavior = .never
         view.dataDetectorTypes = []
         view.accessibilityIdentifier = "reading-text"
-        view.accessibilityHint = "可用辅助功能操作选择单词、查词或收藏。"
+        view.accessibilityHint = "选中单词或词组即可查词；也可用辅助功能操作选择单词、查词或收藏。"
         view.delegate = context.coordinator
         context.coordinator.attach(to: view)
         context.coordinator.update(self, in: view)
@@ -213,6 +215,8 @@ struct ReadingSurface: UIViewRepresentable {
         private var restoring = false
         private var positionScheduled = false
         private var tapFilter = TapFilter()
+        private let blankTap = DeferredTap()
+        private let selectionLookup = SelectionLookup()
         private let flash = WordFlash()
         private var displayLink: CADisplayLink?
         private var lastTick: CFTimeInterval?
@@ -235,6 +239,9 @@ struct ReadingSurface: UIViewRepresentable {
             tap.cancelsTouchesInView = false
             tap.delegate = self
             view.addGestureRecognizer(tap)
+            selectionLookup.look = { [weak self] value, _ in self?.parent.onLookup(value) }
+            selectionLookup.clear = { [weak self] in self?.parent.onDeselect() }
+            view.addGestureRecognizer(selectionLookup.fingers)
             view.accessibilityCustomActions = [
                 UIAccessibilityCustomAction(name: "选择下一个单词", target: self, selector: #selector(selectNextWord)),
                 UIAccessibilityCustomAction(name: "选择上一个单词", target: self, selector: #selector(selectPreviousWord)),
@@ -246,6 +253,9 @@ struct ReadingSurface: UIViewRepresentable {
         func detach(from view: ReaderTextView) {
             guard textView === view else { return } // A superseded view must not clear the current one.
             flash.cancel()
+            blankTap.cancel()
+            selectionLookup.cancel()
+            view.removeGestureRecognizer(selectionLookup.fingers)
             stopAutoScroll()
             view.delegate = nil
             view.didLayout = nil
@@ -254,7 +264,7 @@ struct ReadingSurface: UIViewRepresentable {
         }
 
         func update(_ value: ReadingSurface, in view: ReaderTextView) {
-            if parent.lookingUp && !value.lookingUp { flash.cancel() }
+            if parent.lookingUp && !value.lookingUp { selectionLookup.dismiss() }
             parent = value // Refresh callbacks even when the document is unchanged.
             let size = ReaderTypography.pointSize(value.layout.fontSize)
             let chapterChanged = renderedChapterID != value.chapter.id
@@ -349,6 +359,7 @@ struct ReadingSurface: UIViewRepresentable {
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            selectionLookup.dismiss()
             parent.onScroll()
         }
 
@@ -410,7 +421,8 @@ struct ReadingSurface: UIViewRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
             guard let view = textView else { return false }
             tapFilter.began(touch, in: view)
-            // A tap that stops a fling is not a lookup.
+            blankTap.touchBegan()
+            // A tap that stops a fling only stops it.
             return !view.isDragging && !view.isDecelerating && !UIAccessibility.isVoiceOverRunning
         }
 
@@ -419,34 +431,31 @@ struct ReadingSurface: UIViewRepresentable {
             true // UITextView's own selection recognizers keep working.
         }
 
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            ReaderTextTools.isTextMultiTap(otherGestureRecognizer)
-        }
-
         @objc private func tapped(_ gesture: UITapGestureRecognizer) {
-            guard gesture.state == .ended, let view = textView, tapFilter.isQuickTap(in: view) else { return }
+            guard gesture.state == .ended, let view = textView, tapFilter.isQuick else { return }
+            // A tap on the selection itself would only bring back the edit menu; any tap lets go of it instead.
+            if tapFilter.beganWithSelection { selectionLookup.deselect(); return }
+            guard view.selectedRange.length == 0 else { return } // The second tap of a double tap selected a word.
             guard parent.interactive else { parent.onTapBlank(); return }
             let location = gesture.location(in: view)
             if let target = ReaderTextTools.link(at: location, in: view) {
                 parent.onTapLink(target)
-            } else if let range = ReaderTextTools.wordRange(at: location, in: view, words: wordRanges),
-                      let selection = ReaderTextTools.selection(for: range, in: view) {
-                flash.show(range, in: view.textStorage, hold: true)
-                parent.onTapWord(selection)
             } else {
-                parent.onTapBlank()
+                blankTap.run { [weak self, weak view] in
+                    guard let self, let view, view.selectedRange.length == 0 else { return }
+                    self.parent.onTapBlank()
+                }
             }
         }
 
-        // Native long-press selection handles and Copy remain intact; the menu adds lookup and save.
+        // Selecting is looking up: long press or double tap a word, drag the handles to widen it to a phrase.
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            selectionLookup.changed(in: textView)
+        }
+
+        // The lookup card offers what the edit menu would.
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
-            ReaderTextTools.editMenu(for: range, in: textView, suggestedActions: suggestedActions,
-                                     onLookup: { [weak self, weak textView] value in
-                                         if let textView { self?.flash.show(value.range, in: textView.textStorage, hold: true) }
-                                         self?.parent.onLookup(value)
-                                     },
-                                     onSave: { [weak self] in self?.parent.onSave($0) })
+            ReaderTextTools.noEditMenu
         }
 
         // MARK: Accessibility
@@ -497,14 +506,6 @@ struct ReadingSurface: UIViewRepresentable {
 /// view whose storage holds the whole chapter text.
 @MainActor
 enum ReaderTextTools {
-    /// UITextView's double tap, which selects a word. Reading taps take precedence over it, so a quick second
-    /// tap on a word looks it up again instead of leaving a selection the next tap would only clear.
-    /// Long-press selection is unaffected.
-    static func isTextMultiTap(_ recognizer: UIGestureRecognizer) -> Bool {
-        guard let tap = recognizer as? UITapGestureRecognizer, tap.numberOfTapsRequired > 1 else { return false }
-        return tap.view is UITextView
-    }
-
     /// The character under a point, or nil in margins, paragraph gaps and below the last line.
     static func characterIndex(at location: CGPoint, in view: UITextView) -> Int? {
         guard view.textStorage.length > 0 else { return nil }
@@ -540,14 +541,18 @@ enum ReaderTextTools {
         return nil
     }
 
+    /// `proposedRange` is in the view's text; the selection is in the chapter's, which a page only holds part of.
     static func selection(for proposedRange: NSRange, in view: UITextView) -> ReadingSelection? {
-        let string = view.textStorage.string as NSString
-        guard proposedRange.location != NSNotFound, proposedRange.length > 0, NSMaxRange(proposedRange) <= string.length else { return nil }
-        let raw = string.substring(with: proposedRange)
+        let page = view as? PageTextView
+        let base = page?.page.range.location ?? 0
+        let string = page?.chapterText ?? view.textStorage.string as NSString
+        guard proposedRange.location != NSNotFound, proposedRange.length > 0,
+              NSMaxRange(proposedRange) <= view.textStorage.length else { return nil }
+        let raw = string.substring(with: NSRange(location: proposedRange.location + base, length: proposedRange.length))
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let leading = (raw as NSString).rangeOfCharacter(from: .whitespacesAndNewlines.inverted).location
-        let range = NSRange(location: proposedRange.location + leading, length: (trimmed as NSString).length)
+        let range = NSRange(location: proposedRange.location + base + leading, length: (trimmed as NSString).length)
         // Sentence boundaries are searched within the paragraph only.
         let paragraphRange = string.paragraphRange(for: range)
         let paragraph = string.substring(with: paragraphRange)
@@ -565,7 +570,7 @@ enum ReaderTextTools {
             .replacingOccurrences(of: ChapterTextBuilder.attachment, with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return ReadingSelection(text: trimmed, sentence: sentence, offset: range.location, length: range.length,
-                                anchor: windowRect(for: range, in: view))
+                                anchor: windowRect(for: NSRange(location: range.location - base, length: range.length), in: view))
     }
 
     /// The bounding box of the range's glyphs in window coordinates, which SwiftUI calls global.
@@ -573,7 +578,7 @@ enum ReaderTextTools {
         guard view.window != nil else { return nil }
         var rects: [CGRect] = []
         if view.textLayoutManager == nil {
-            // Pages share one layout manager, one container each; UITextInput only measures the first page right.
+            // Measured with the view's own layout manager and container, as it draws.
             let manager = view.layoutManager, container = view.textContainer
             let glyphs = NSIntersectionRange(manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil),
                                              manager.glyphRange(for: container))
@@ -591,19 +596,8 @@ enum ReaderTextTools {
         return view.convert(rects.dropFirst().reduce(first) { $0.union($1) }, to: nil)
     }
 
-    static func editMenu(for range: NSRange, in view: UITextView, suggestedActions: [UIMenuElement],
-                         onLookup: @escaping (ReadingSelection) -> Void, onSave: @escaping (ReadingSelection) -> Void) -> UIMenu? {
-        guard selection(for: range, in: view) != nil else { return nil }
-        let lookup = UIAction(title: "查词", image: UIImage(systemName: "character.book.closed")) { [weak view] _ in
-            guard let view, let value = selection(for: range, in: view) else { return }
-            onLookup(value)
-        }
-        let save = UIAction(title: "收藏", image: UIImage(systemName: "bookmark")) { [weak view] _ in
-            guard let view, let value = selection(for: range, in: view) else { return }
-            onSave(value)
-        }
-        return UIMenu(children: [UIMenu(options: .displayInline, children: [lookup, save])] + suggestedActions)
-    }
+    /// Shown in place of the edit menu: nothing.
+    static let noEditMenu = UIMenu(children: [])
 
     /// Attribute-only edits; the string never changes.
     /// Occurrences of words still being learned, for the dotted underline.
@@ -632,33 +626,173 @@ enum ReaderTextTools {
 @MainActor
 struct TapFilter {
     private var beganAt: TimeInterval = 0
-    private var beganWithSelection = false
+    private(set) var beganWithSelection = false
 
     mutating func began(_ touch: UITouch, in view: UITextView) {
         beganAt = touch.timestamp
         beganWithSelection = view.selectedRange.length > 0
     }
 
-    func isQuickTap(in view: UITextView) -> Bool {
-        !beganWithSelection && ProcessInfo.processInfo.systemUptime - beganAt < 0.35 && view.selectedRange.length == 0
+    var isQuick: Bool { ProcessInfo.processInfo.systemUptime - beganAt < 0.35 }
+}
+
+/// Holds a tap's action for the double-tap interval, so a double tap selects a word without also toggling the toolbars.
+@MainActor
+final class DeferredTap {
+    private var task: Task<Void, Never>?
+    private var interruptedAt: TimeInterval?
+
+    /// A touch landed while a tap was waiting: that tap and the one now starting are a double tap.
+    func touchBegan() {
+        guard task != nil else { return }
+        cancel()
+        interruptedAt = ProcessInfo.processInfo.systemUptime
+    }
+
+    func run(_ action: @escaping @MainActor () -> Void) {
+        if let interruptedAt, ProcessInfo.processInfo.systemUptime - interruptedAt < 0.5 {
+            self.interruptedAt = nil // The second tap of a double tap.
+            return
+        }
+        interruptedAt = nil
+        task = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            self?.task = nil
+            action()
+        }
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
     }
 }
 
-/// Highlights a looked-up word until the card closes, or a jumped-to word briefly.
+/// Looks up the native selection once per gesture. Dragging a handle reports the selection once, as it lets go, but
+/// a long press that slides on reports every word it passes and adjusts the selection once more just after the lift,
+/// so a selection made under a finger is looked up when it lifts and the selection has stopped changing.
+@MainActor
+final class SelectionLookup {
+    /// Add to the view the selecting touches land in.
+    let fingers = FingerWatch()
+    var look: (ReadingSelection, UITextView) -> Void = { _, _ in }
+    /// The selection went away.
+    var clear: () -> Void = {}
+    private weak var view: UITextView?
+    private var pending = false
+    private var settle: Task<Void, Never>?
+
+    init() {
+        fingers.onLift = { [weak self] in
+            guard let self, self.pending else { return }
+            self.pending = false
+            self.lookUpWhenSettled()
+        }
+    }
+
+    func changed(in view: UITextView) {
+        guard view.selectedRange.length > 0 else {
+            guard self.view === view else { return }
+            self.view = nil
+            cancel()
+            clear()
+            return
+        }
+        self.view = view
+        if fingers.touching {
+            pending = true
+            settle?.cancel()
+        } else if settle != nil || pending {
+            lookUpWhenSettled()
+        } else {
+            lookUp()
+        }
+    }
+
+    /// The card closed some other way: lets go of the selection it showed.
+    func dismiss() {
+        cancel()
+        guard let view else { return }
+        self.view = nil
+        if view.selectedRange.length > 0 { view.selectedRange = NSRange(location: 0, length: 0) }
+    }
+
+    /// Lets go of the selection and closes its card.
+    func deselect() {
+        guard view != nil else { return }
+        dismiss()
+        clear()
+    }
+
+    func cancel() {
+        pending = false
+        settle?.cancel()
+        settle = nil
+    }
+
+    private func lookUpWhenSettled() {
+        settle?.cancel()
+        settle = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(60))
+            guard !Task.isCancelled, let self else { return }
+            self.settle = nil
+            self.lookUp()
+        }
+    }
+
+    private func lookUp() {
+        guard let view, let value = ReaderTextTools.selection(for: view.selectedRange, in: view) else { return }
+        look(value, view)
+    }
+}
+
+/// Follows fingers without taking part in any gesture: it never recognizes, and nothing prevents it from watching.
+final class FingerWatch: UIGestureRecognizer {
+    var onLift: () -> Void = {}
+    private(set) var touching = false
+
+    init() {
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesEnded = false
+    }
+
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) { touching = true }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { lifted(touches, event) }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { lifted(touches, event) }
+
+    private func lifted(_ touches: Set<UITouch>, _ event: UIEvent) {
+        let down = (event.touches(for: self) ?? []).subtracting(touches).contains { $0.phase != .ended && $0.phase != .cancelled }
+        guard !down else { return }
+        touching = false
+        state = .failed
+        onLift()
+    }
+
+    override func reset() {
+        super.reset()
+        touching = false
+    }
+}
+
+/// Briefly highlights a jumped-to word.
 @MainActor
 final class WordFlash {
     private var range: NSRange?
     private weak var storage: NSTextStorage?
     private var task: Task<Void, Never>?
 
-    /// `hold` keeps the highlight until `cancel()`; otherwise it fades after a moment.
-    func show(_ range: NSRange, in storage: NSTextStorage, hold: Bool = false) {
+    /// The highlight fades after a moment.
+    func show(_ range: NSRange, in storage: NSTextStorage) {
         guard NSMaxRange(range) <= storage.length else { return }
         cancel()
         self.range = range
         self.storage = storage
         storage.addAttribute(.backgroundColor, value: UIColor.readerHighlight, range: range)
-        guard !hold else { return }
         task = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(1.6))
             guard !Task.isCancelled else { return }
@@ -682,3 +816,6 @@ final class WordFlash {
         storage = nil
     }
 }
+
+
+
