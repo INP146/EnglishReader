@@ -171,5 +171,5 @@ git add Dictionaries/manifest.json && git commit && git push origin main
 - [x] 第 1 步：分包脚本与 schema 2、内置核心包、变形还原层、并集查词、单词卡收起/展开（2026-11-17）
 - [x] 第 2 步：打包与清单工具、下载管理、设置 › 词典（2026-11-17）
 - [x] 发布流程：`Tools/dictionary_release.py`、Actions 工作流、ECDICT 固定到 `9c46923`（2026-11-18）
-- [ ] 发布 `dict-2026.11.18`
+- [ ] 发布 `dict-2026.11.18.1`（`dict-2026.11.18` 因 CI 缺 Python 3.9 未发布）
 - [ ] 以后：网络词典与 LLM、水平设置、自定义导入
