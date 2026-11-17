@@ -34,6 +34,8 @@ struct ReaderView: View {
     @State private var fraction = 0.0
     @State private var jump: JumpRequest?
     @State private var lookup: ReadingSelection?
+    /// Where the lookup bubble may go, in global coordinates: inside the safe area and above the bottom bars.
+    @State private var lookupArea: CGRect = .zero
     @State private var chromeVisible = true
     @State private var bottomSafeArea: CGFloat = 0
     @State private var showPanel = false
@@ -77,13 +79,14 @@ struct ReaderView: View {
     var body: some View {
         NavigationStack {
             readingArea
-            // Chrome floats over the text instead of resizing it; the lookup card stays clear of the bottom bar.
+            // Chrome floats over the text instead of resizing it; the lookup bubble stays clear of the bottom bar.
             .overlay {
                 Color.clear
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { lookupArea = $0 }
+                    .overlay { lookupOverlay }
                     .safeAreaInset(edge: .bottom, spacing: 0) { bottomInset }
                     .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { bottomSafeArea = $0 }
                     .overlay(alignment: .top) { topBar }
-                    .overlay(alignment: .top) { lookupOverlay }
                     .overlay(alignment: .top) {
                         if let toast { ToastLabel(text: toast).padding(.top, 8) }
                     }
@@ -237,17 +240,31 @@ struct ReaderView: View {
         }
     }
 
+    /// The card pops out of the looked-up word, so the eyes stay where they were reading.
     @ViewBuilder private var lookupOverlay: some View {
         if let lookup {
-            LookupCard(selection: lookup, entry: WordDictionary.shared.lookup(lookup.text),
-                       isSaved: store.favorite(matching: lookup.text) != nil,
-                       palette: palette,
-                       onSave: { save(lookup) },
-                       onMore: { systemTerm = SystemTerm(text: lookup.text) },
-                       onClose: { self.lookup = nil })
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .transition(.move(edge: .top).combined(with: .opacity))
+            // Without a known position (e.g. VoiceOver), the bubble hangs from the top edge.
+            let anchor = lookup.anchor.map { $0.offsetBy(dx: -lookupArea.minX, dy: -lookupArea.minY) }
+            let size = lookupArea.size
+            let point = anchor.map { UnitPoint(x: size.width > 0 ? $0.midX / size.width : 0.5,
+                                               y: size.height > 0 ? $0.midY / size.height : 0) } ?? .top
+            LookupBubbleLayout(anchor: anchor) {
+                Rectangle()
+                    .fill(Color(uiColor: palette.chrome))
+                    .frame(width: 16, height: 16)
+                    .rotationEffect(.degrees(45))
+                    .opacity(anchor == nil ? 0 : 1)
+                    .accessibilityHidden(true)
+                LookupCard(selection: lookup, entry: WordDictionary.shared.lookup(lookup.text),
+                           isSaved: store.favorite(matching: lookup.text) != nil,
+                           palette: palette,
+                           onSave: { save(lookup) },
+                           onMore: { systemTerm = SystemTerm(text: lookup.text) },
+                           onClose: { self.lookup = nil })
+            }
+            .compositingGroup()
+            .shadow(color: .black.opacity(0.14), radius: 16, y: 4)
+            .transition(.scale(scale: 0.85, anchor: point).combined(with: .opacity))
             .id(lookup.id)
         }
     }
@@ -654,9 +671,44 @@ struct LookupCard: View {
         }
         .padding(16)
         .background(Color(uiColor: palette.chrome), in: RoundedRectangle(cornerRadius: 20))
-        .shadow(color: .black.opacity(0.12), radius: 16, y: 4)
         .tint(.accent)
         .accessibilityIdentifier("lookup-card")
+    }
+}
+
+/// Places the lookup card just below the word, or above it when there's no room below,
+/// with the pointer (the first subview, drawn behind the card) poking out at the word.
+struct LookupBubbleLayout: Layout {
+    /// The word's frame in the layout's coordinates; nil puts the card at the top.
+    var anchor: CGRect?
+    var margin: CGFloat = 12
+    var gap: CGFloat = 10
+    var maxWidth: CGFloat = 440
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { return }
+        let pointer = subviews[0], card = subviews[1]
+        let width = max(0, min(bounds.width - 2 * margin, maxWidth))
+        let height = card.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+        let top = bounds.minY + margin, bottom = bounds.maxY - margin
+
+        guard let anchor = anchor?.offsetBy(dx: bounds.minX, dy: bounds.minY) else {
+            card.place(at: CGPoint(x: bounds.midX - width / 2, y: top), proposal: ProposedViewSize(width: width, height: height))
+            pointer.place(at: CGPoint(x: bounds.midX, y: top), anchor: .center, proposal: .unspecified)
+            return
+        }
+        let roomBelow = bottom - (anchor.maxY + gap), roomAbove = (anchor.minY - gap) - top
+        let below = roomBelow >= height || roomBelow >= roomAbove
+        let y = min(max(below ? anchor.maxY + gap : anchor.minY - gap - height, top), max(top, bottom - height))
+        let x = min(max(anchor.midX - width / 2, bounds.minX + margin), bounds.maxX - margin - width)
+        card.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(width: width, height: height))
+        // Kept clear of the rounded corners.
+        let pointerX = min(max(anchor.midX, x + 28), x + width - 28)
+        pointer.place(at: CGPoint(x: pointerX, y: below ? y : y + height), anchor: .center, proposal: .unspecified)
     }
 }
 

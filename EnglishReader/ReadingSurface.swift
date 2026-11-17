@@ -9,6 +9,8 @@ struct ReadingSelection: Identifiable, Equatable {
     var sentence: String
     var offset: Int
     var length: Int
+    /// Where the text sits on screen (window coordinates) when it was picked; the lookup bubble points at it.
+    var anchor: CGRect?
 }
 
 extension ReadingSelection {
@@ -562,7 +564,19 @@ enum ReaderTextTools {
             .replacingOccurrences(of: ChapterTextBuilder.lineSeparator, with: " ")
             .replacingOccurrences(of: ChapterTextBuilder.attachment, with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return ReadingSelection(text: trimmed, sentence: sentence, offset: range.location, length: range.length)
+        return ReadingSelection(text: trimmed, sentence: sentence, offset: range.location, length: range.length,
+                                anchor: windowRect(for: range, in: view))
+    }
+
+    /// The bounding box of the range's glyphs in window coordinates, which SwiftUI calls global.
+    static func windowRect(for range: NSRange, in view: UITextView) -> CGRect? {
+        guard view.window != nil,
+              let start = view.position(from: view.beginningOfDocument, offset: range.location),
+              let end = view.position(from: start, offset: range.length),
+              let textRange = view.textRange(from: start, to: end) else { return nil }
+        let rects = view.selectionRects(for: textRange).map(\.rect).filter { !$0.isNull && !$0.isEmpty }
+        guard let first = rects.first else { return nil }
+        return view.convert(rects.dropFirst().reduce(first) { $0.union($1) }, to: nil)
     }
 
     static func editMenu(for range: NSRange, in view: UITextView, suggestedActions: [UIMenuElement],
