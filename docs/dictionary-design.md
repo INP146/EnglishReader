@@ -93,7 +93,7 @@ form(form TEXT PRIMARY KEY, lemma TEXT)  -- 仅 core：变形 → 原形
 
 ## 下载（第 2 步）
 
-- **托管**：词典包压缩成 zip，作为 GitHub Releases 资源，发布在本仓库（INP146/EnglishReader，公开）的 `dict-<版本>` 标签下，见下面的发布流程。App Store 托管的 On-Demand Resources 和 Background Assets 不适用：app 目前是重签安装，不经过 App Store。
+- **托管**：词典包压缩成 zip，作为 GitHub Releases 资源，发布在本仓库（INP146/EnglishReader，公开）的 `dict-<版本>` 标签下，见 `docs/release.md`。App Store 托管的 On-Demand Resources 和 Background Assets 不适用：app 目前是重签安装，不经过 App Store。
 - **清单**：`Dictionaries/manifest.json` 放在仓库里，app 从 `raw.githubusercontent.com/INP146/EnglishReader/main/Dictionaries/manifest.json` 读取。清单写明格式（`format: 1`）和版本（`release`），每个包写明 id、名称、分组、顺序、schema、版本、条目数、zip 大小、解压后大小、sha256、下载地址。
 - **下载与安装**：
   - 下载用 `URLSession` 的下载任务，失败时保留续传数据（resume data）。最大的包压缩后约 9 MB，所以不用后台会话（background session）。
@@ -117,48 +117,9 @@ form(form TEXT PRIMARY KEY, lemma TEXT)  -- 仅 core：变形 → 原形
 
 查不到词时，单词卡提示“可在 设置 › 词典 下载更多词库”。
 
-### 发布流程
+### 发布
 
-参照 ArchiveX 的自动发布：本地脚本准备与校验，推送 tag 后由 GitHub Actions 构建并创建 Release；脚本从不提交、打 tag 或推送。
-
-**版本**：`2026.11.18`，同一天再发布一次用 `2026.11.18.1`。tag 为 `dict-<版本>`。每个包的 `meta.version` 和清单都记录版本；app 按数字逐段比较，清单里的版本更新时显示“更新”。
-
-**数据源固定**：`Dictionaries/release.json` 记录当前版本，以及 ECDICT 的提交号、`ecdict.csv` 的下载地址和 sha256。构建只用这份固定的数据，下载后先核对 sha256，所以任何时候都能重建出同一批包。
-
-**Tools/dictionary_release.py**（只用标准库，兼容 macOS 自带的 Python 3.9）：
-
-| 命令 | 作用 |
-|---|---|
-| `prepare <版本> [--source-commit <ECDICT 提交>]` | 版本必须比当前新。构建全部包，更新 app 内置的核心词典和 `release.json`，生成发布说明草稿 `docs/releases/dict-<版本>.md`。`--dry-run` 只列出将修改的文件。 |
-| `check [tag] [--require-notes]` | 核对 `release.json`、内置核心词典的 meta、发布说明（不得含 `RELEASE_TODO`）、`manifest.json`。 |
-| `build [--verify-core]` | 按 `release.json` 构建全部包到 `build/dict`，打成 zip，生成 `manifest.json` 和 `SHA256SUMS`。zip 的时间戳和权限固定，同一环境构建两次逐字节一致。`--verify-core` 用表内容哈希比对构建出的核心词典和 app 内置的，不受 SQLite 版本影响。 |
-| `adopt <版本>` | 下载已发布 Release 的 `manifest.json` 和 `SHA256SUMS`，核对哈希，确认每个包都能下载，再写入 `Dictionaries/manifest.json`。 |
-
-**Actions**：
-
-- `validate-dictionaries.yml`：在 PR 和推送 main 时运行，也由发布流程调用。运行 `check` 和 `Tools/tests` 里的脚本测试；发布时还要求发布说明已完成，且 tag 与 `release.json` 一致。
-- `publish-dictionaries.yml`：推送 `dict-*` tag 时运行。先校验，再 `build --verify-core`，然后用发布说明创建 Release，附上各包 zip、`manifest.json` 和 `SHA256SUMS`。Release 带 `--latest=false`，不占用仓库的 Latest Release，留给以后的 app 发布。已存在的 Release 不覆盖。
-
-**日常发版**：
-
-```sh
-python3 Tools/dictionary_release.py prepare 2026.12.01 --dry-run
-python3 Tools/dictionary_release.py prepare 2026.12.01        # 换数据源时加 --source-commit <40 位提交号>
-# 填写并审阅 docs/releases/dict-2026.12.01.md，删除全部 RELEASE_TODO
-python3 Tools/dictionary_release.py check --require-notes
-# 跑 app 的单元测试和选词 UI 测试（核心词典变了）
-git add -A && git commit
-git push origin main
-git tag -a dict-2026.12.01 -m "词典包 dict-2026.12.01"
-git push origin dict-2026.12.01
-# Actions 成功后：
-python3 Tools/dictionary_release.py adopt 2026.12.01
-git add Dictionaries/manifest.json && git commit && git push origin main
-```
-
-清单最后由人来提交：Release 的资源都确认能下载之后，app 才会看到新包。只改 app 而不改词典时，不需要走这个流程。
-
-**失败与重跑**：校验或构建失败时不会创建 Release，修好后用下一个版本号重新发布，不移动已推送的 tag。Release 创建后发现问题，同样发下一个版本，再 `adopt`。
+词典包的版本、构建、发布和上线流程见 `docs/release.md`。
 
 ## 以后
 
@@ -171,5 +132,6 @@ git add Dictionaries/manifest.json && git commit && git push origin main
 - [x] 第 1 步：分包脚本与 schema 2、内置核心包、变形还原层、并集查词、单词卡收起/展开（2026-11-17）
 - [x] 第 2 步：打包与清单工具、下载管理、设置 › 词典（2026-11-17）
 - [x] 发布流程：`Tools/dictionary_release.py`、Actions 工作流、ECDICT 固定到 `9c46923`（2026-11-18）
+- [x] AI 起草发布说明（`Tools/release_ai.py`，2026-11-18）
 - [x] 发布 `dict-2026.11.18.1` 并 adopt（2026-11-18；`dict-2026.11.18` 因 CI 缺 Python 3.9 未发布）
 - [ ] 以后：网络词典与 LLM、水平设置、自定义导入

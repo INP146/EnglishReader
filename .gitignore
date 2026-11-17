@@ -13,3 +13,6 @@ xcuserdata/
 
 # Python 字节码（Tools/ 脚本与测试）
 __pycache__/
+
+# 本地发布配置（RELEASE_AI_*），见 .env.example
+.env

@@ -6,12 +6,14 @@ Run with: python3 -m unittest discover -s Tools/tests -v
 import csv
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dictionary_release as release  # noqa: E402
@@ -113,6 +115,10 @@ class BuildTests(unittest.TestCase):
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
+        # Template mode, whatever RELEASE_AI_* the shell has set.
+        self.env = mock.patch.dict(os.environ, {"RELEASE_AI_PROVIDER": "none"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
         csv_path = self.root / release.SOURCE_CSV
         csv_path.parent.mkdir(parents=True)
         write_csv(csv_path)

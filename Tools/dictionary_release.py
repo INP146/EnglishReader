@@ -2,6 +2,7 @@
 """Prepare, build, check and adopt dictionary pack releases (see docs/dictionary-design.md).
 
   prepare VERSION [--source-commit SHA]  bump the release, rebuild the bundled core, draft release notes
+                                         (with RELEASE_AI_PROVIDER in .env, a local codex/claude writes the draft)
   check [TAG] [--require-notes]          release.json, the bundled core, notes and manifest agree
   build [--verify-core]                  fetch the pinned ECDICT, build and package every pack (CI runs this)
   adopt VERSION                          point Dictionaries/manifest.json at a published release
@@ -41,6 +42,8 @@ ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 _spec = importlib.util.spec_from_file_location("build_dictionary", ROOT / "Tools" / "build-dictionary.py")
 builder = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(builder)
+sys.path.insert(0, str(ROOT / "Tools"))
+import release_ai  # noqa: E402
 
 
 def normalize_version(value: str) -> str:
@@ -210,21 +213,45 @@ def check(root: Path, version: str | None = None, *, require_notes: bool = False
     return current
 
 
-def draft_notes(version: str, previous: str | None, counts: dict[str, int], source: dict) -> str:
-    base = f"相对 {tag(previous)}" if previous else "首次发布"
-    rows = "\n".join(
-        f"| {title}{'（内置于 app）' if pack == 'core' else ''} | {group} | {counts[pack]:,} |"
-        for pack, (title, group, _) in sorted(builder.PACKS.items(), key=lambda item: item[1][2]))
-    return f"""# 词典包 {tag(version)} 发布说明
+def previous_counts(root: Path) -> dict[str, int]:
+    """Entry counts of the release in use: the bundled core and the adopted manifest."""
+    counts = {}
+    if (root / CORE).is_file():
+        counts["core"] = int(pack_meta(root / CORE).get("entries", 0))
+    if (root / MANIFEST).is_file():
+        for pack in json.loads((root / MANIFEST).read_text(encoding="utf-8")).get("packs", []):
+            counts[pack["id"]] = pack["entries"]
+    return counts
 
+
+def draft_notes(version: str, previous: str | None, counts: dict[str, int], source: dict,
+                before: dict[str, int] | None = None, *, ai_review: bool = False) -> str:
+    base = f"相对 {tag(previous)}" if previous else "首次发布"
+    before = before or {}
+
+    def change(pack):
+        if pack not in before:
+            return "新增" if previous else "—"
+        delta = counts[pack] - before[pack]
+        return f"{delta:+,}" if delta else "0"
+
+    rows = "\n".join(
+        f"| {title}{'（内置于 app）' if pack == 'core' else ''} | {group} | {counts[pack]:,} | {change(pack)} |"
+        for pack, (title, group, _) in sorted(builder.PACKS.items(), key=lambda item: item[1][2]))
+    review = ""
+    if ai_review:
+        review = (f"\n{TODO}：以下草稿由本地 AI CLI 根据 {base.replace('相对 ', '')} 以来的改动生成，"
+                  "请核对主要变更后删除此行及其他待确认标记。\n")
+    return f"""# 词典包 {tag(version)} 发布说明
+{review}
 ## 主要变更
 
 {TODO}：填写{base}的主要变更（收录规则、数据源、新增或调整的包），删除此占位行。
 
 ## 词典包
 
-| 包 | 分组 | 条目 |
-|---|---|---|
+| 包 | 分组 | 条目 | 变化 |
+|---|---|---|---|
 {rows}
 
 数据来源：ECDICT [`{source['commit'][:7]}`](https://github.com/skywind3000/ECDICT/commit/{source['commit']})，
@@ -240,7 +267,8 @@ def draft_notes(version: str, previous: str | None, counts: dict[str, int], sour
 """
 
 
-def prepare(root: Path, version: str, *, source_commit: str | None = None, dry_run: bool = False) -> list[Path]:
+def prepare(root: Path, version: str, *, source_commit: str | None = None, dry_run: bool = False,
+            base_tag: str | None = None) -> list[Path]:
     version = normalize_version(version)
     release = load_release(root) if (root / RELEASE).is_file() else None
     previous = release["version"] if release else None
@@ -254,7 +282,13 @@ def prepare(root: Path, version: str, *, source_commit: str | None = None, dry_r
     if source_commit is not None and HEX40.fullmatch(source_commit) is None:
         raise ValueError("--source-commit 必须是 40 位的完整提交号")
     paths = [root / RELEASE, root / CORE, notes]
+    config = release_ai.load_config(root)
+    if config.provider != "none":
+        # Before any download or build, so a missing tag fails fast.
+        release_ai.validate_base_tag(root, previous, base_tag)
     if dry_run:
+        if config.provider != "none":
+            print(f"将调用 {config.provider} 生成发布说明草稿（dry-run 不调用模型）")
         return paths
 
     if source_commit is None:
@@ -271,12 +305,17 @@ def prepare(root: Path, version: str, *, source_commit: str | None = None, dry_r
     counts = build_packs(csv_path, out, version, source["commit"])
     package(out, version)
 
-    # Everything built; only now touch the repository.
+    # Everything built. The notes come first: if the agent fails, the release files stay as they were.
+    template = draft_notes(version, previous, counts, source, previous_counts(root), ai_review=config.provider != "none")
+    if config.provider == "none":
+        notes.parent.mkdir(parents=True, exist_ok=True)
+        notes.write_text(template, encoding="utf-8")
+    else:
+        release_ai.generate(root, version, previous, config, template=template, target=notes.relative_to(root),
+                            base_tag=base_tag)
     shutil.copyfile(out / "dictionary-core.sqlite", root / CORE)
     (root / RELEASE).parent.mkdir(parents=True, exist_ok=True)
     (root / RELEASE).write_text(json.dumps({"version": version, "source": source}, indent=2) + "\n", encoding="utf-8")
-    notes.parent.mkdir(parents=True, exist_ok=True)
-    notes.write_text(draft_notes(version, previous, counts, source), encoding="utf-8")
     check(root)
     return paths
 
@@ -322,7 +361,8 @@ def main(argv: list[str] | None = None) -> int:
     prepare_parser = commands.add_parser("prepare", help="升级版本、重建内置核心词典并生成发布说明草稿")
     prepare_parser.add_argument("version")
     prepare_parser.add_argument("--source-commit", help="改用 ECDICT 的另一个提交（40 位）")
-    prepare_parser.add_argument("--dry-run", action="store_true", help="只显示将修改的文件")
+    prepare_parser.add_argument("--dry-run", action="store_true", help="只显示将修改的文件，不构建、不调用模型")
+    prepare_parser.add_argument("--base-tag", help="AI 草稿的比较基准；默认是上一个词典版本的 tag")
     check_parser = commands.add_parser("check", help="校验版本一致性，可传入待发布 tag")
     check_parser.add_argument("version", nargs="?")
     check_parser.add_argument("--require-notes", action="store_true", help="要求发布说明已完成")
@@ -333,7 +373,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
-            for path in prepare(ROOT, args.version, source_commit=args.source_commit, dry_run=args.dry_run):
+            for path in prepare(ROOT, args.version, source_commit=args.source_commit, dry_run=args.dry_run,
+                                base_tag=args.base_tag):
                 print(f"{'将修改' if args.dry_run else '已准备'} {path.relative_to(ROOT)}")
             if not args.dry_run:
                 print("请填写发布说明，然后运行 python3 Tools/dictionary_release.py check --require-notes")
