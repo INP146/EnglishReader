@@ -25,6 +25,9 @@ struct ContentView: View {
                 WordsView(store: store) { route = $0 }
             }
             .badge(store.favorites.filter { $0.isDue(at: .now) }.count)
+            Tab("设置", systemImage: "gearshape", value: 2) {
+                SettingsView()
+            }
         }
         .tint(.accent)
         .fullScreenCover(item: $route) { value in

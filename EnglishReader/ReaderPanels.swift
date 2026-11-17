@@ -123,8 +123,7 @@ struct ReaderSettingsPanel: View {
             guard let item else { return }
             Task {
                 do {
-                    guard let data = try await item.loadTransferable(type: Data.self) else { throw CocoaError(.fileReadUnknown) }
-                    try ReaderBackdrop.saveCustomImage(data)
+                    try await ReaderBackdrop.saveCustomImage(from: item)
                     backdropVersion += 1
                     backdrop = .custom
                 } catch {
@@ -309,9 +308,9 @@ struct ReaderSpacingSettings: View {
     var body: some View {
         NavigationStack {
             Form {
-                slider("行距", value: $lineSpacing, in: 1.0...2.2, step: 0.05, format: { String(format: "%.2f", $0) })
-                slider("段距", value: $paragraphSpacing, in: 0...1.5, step: 0.05, format: { String(format: "%.2f", $0) })
-                slider("页边距", value: $margin, in: 12...48, step: 2, format: { "\(Int($0))" })
+                ReaderSettingSlider(title: "行距", value: $lineSpacing, range: 1.0...2.2, step: 0.05) { String(format: "%.2f", $0) }
+                ReaderSettingSlider(title: "段距", value: $paragraphSpacing, range: 0...1.5, step: 0.05) { String(format: "%.2f", $0) }
+                ReaderSettingSlider(title: "页边距", value: $margin, range: 12...48, step: 2) { "\(Int($0))" }
                 Button("恢复默认") {
                     lineSpacing = ReaderLayout.defaultLineSpacing
                     paragraphSpacing = ReaderLayout.defaultParagraphSpacing
@@ -323,18 +322,6 @@ struct ReaderSpacingSettings: View {
         }
         .presentationDetents([.height(380), .medium])
         .presentationBackgroundInteraction(.enabled(upThrough: .height(380)))
-    }
-
-    private func slider(_ title: LocalizedStringKey, value: Binding<Double>, in range: ClosedRange<Double>, step: Double,
-                        format: @escaping (Double) -> String) -> some View {
-        VStack(alignment: .leading) {
-            HStack {
-                Text(title)
-                Spacer()
-                Text(verbatim: format(value.wrappedValue)).monospacedDigit().foregroundStyle(.secondary)
-            }
-            Slider(value: value, in: range, step: step).accessibilityLabel(title)
-        }
     }
 }
 
@@ -359,12 +346,6 @@ struct ReaderMoreSettings: View {
                 } footer: {
                     Text("自动阅读时屏幕总是保持常亮。")
                 }
-                Section {
-                    Text("书籍、阅读位置和生词都只保存在这台设备上，不会上传。删除应用会一并删除。")
-                    Text("释义来自内置的离线英汉词典 ECDICT（MIT 许可）。示例书节选自 Project Gutenberg 的公版《爱丽丝梦游仙境》。")
-                } header: { Text("关于") }
-                    .font(.footnote).foregroundStyle(.secondary)
-                Section { MadeWithAirBuild() }
             }
             .navigationTitle("更多设置").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }

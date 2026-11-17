@@ -2,7 +2,7 @@
 
 iOS 英文阅读器（SwiftUI，iOS 26，Xcode 26.3+）。离线 EPUB/TXT 导入、点词查释义（内置 ECDICT 子集）、生词本与间隔复习。
 
-本项目最初在 AirBuild 中开发，已迁移为常规 Xcode 项目；功能现状与已知边界见 `IMPLEMENTATION-HANDOFF.md`，早期需求分析见 `intent-opportunities.md`（其中 `/run/airbuild/...` 路径为原环境路径，本地不存在）。
+功能现状与已知边界见 `IMPLEMENTATION-HANDOFF.md`。
 
 ## 结构
 - `EnglishReader/` 应用源码
@@ -12,6 +12,7 @@ iOS 英文阅读器（SwiftUI，iOS 26，Xcode 26.3+）。离线 EPUB/TXT 导入
   - `ReaderView.swift` 阅读页与底部工具栏；`ReadingSurface.swift` 上下滚动正文；`PagedSurface.swift` 分页正文（仿真/覆盖/平移/无动画；每页从上一页结束处起在页面大小的容器里单独排版，装下的就是这一页，显示的也正是这次排版）
   - `ReaderPanels.swift` 设置面板、字体/间距/更多设置、书内搜索；`ReaderStyle.swift` 排版、配色主题、背景纹理
   - `WordsView.swift` 生词本与复习
+  - `SettingsView.swift` 设置标签页（原生 Form 风格）：阅读器设置（与阅读页内设置共用同一批 `@AppStorage` 键）、关于
   - `WordDictionary.swift` 读取 `Resources/dictionary.sqlite`
   - `Theme.swift` 颜色（自动适配深色）
 - `EnglishReaderTests/` 单元测试（`Fixtures/alice.epub` 为真实 Gutenberg EPUB）
@@ -43,7 +44,6 @@ xcodebuild -project EnglishReader.xcodeproj -scheme EnglishReader \
   - 分页/翻页：单元测试 + `-only-testing:EnglishReaderUITests/PagingUITests`
   - 选词/查词：单元测试 + `-only-testing:EnglishReaderUITests/SelectionUITests`
   - 反复迭代时可先 `build-for-testing`，再用 `test-without-building -only-testing:...` 省去编译；修某个失败用例时先只跑该用例（如 `.../SelectionUITests/testCurl`）
-- `MadeWithAirBuild.swift` 及同名图片集是 AirBuild 署名（设置页底部）；如需移除，删除该文件、图片集及 `ReaderView.swift` 中的使用处。
 
 ## 设计原则（教训）
 分页正文曾为求改动最小，让整章共享一条 `NSLayoutManager` 容器链、每页借一个容器显示；后来改为选中查词时才发现 UIKit 不允许这种页面被选择，只能层层打补丁。由此：
