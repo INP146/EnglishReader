@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import Translation
 import UIKit
@@ -616,8 +617,13 @@ struct LookupCard: View {
     /// The card takes the reading theme's toolbar shade and ink, like the bars around the page.
     var palette = ReaderPalette(day: ReaderTheme.defaultDay, night: ReaderTheme.defaultNight)
     var onToggleSaved: () -> Void
+    @AppStorage("dictionaryExpandByDefault") private var expandByDefault = false
+    @State private var expanded: Bool?
+    @State private var openPhrases: Set<String> = []
     @State private var translating = false
     @State private var copied = false
+
+    private var isExpanded: Bool { expanded ?? expandByDefault }
 
     private var isLikelyName: Bool {
         guard let first = selection.text.first, first.isUppercase else { return false }
@@ -634,6 +640,11 @@ struct LookupCard: View {
                     if let phonetic = entry?.phonetic, !phonetic.isEmpty {
                         Text("/\(phonetic)/").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                     }
+                    Button { Pronunciation.speak(entry?.headword ?? selection.text) } label: {
+                        Image(systemName: "speaker.wave.2").font(.subheadline)
+                    }
+                    .accessibilityLabel("朗读")
+                    .accessibilityIdentifier("speak-selection")
                     Spacer(minLength: 0)
                     Button(action: onToggleSaved) {
                         Image(systemName: isSaved ? "star.fill" : "star").font(.body).foregroundStyle(Color.accent)
@@ -641,17 +652,19 @@ struct LookupCard: View {
                     .accessibilityLabel(isSaved ? "已在生词本" : "加入生词本")
                     .accessibilityIdentifier("save-selection")
                 }
-                if let inflected = entry?.inflectedFrom, inflected.lowercased() != entry?.headword.lowercased() {
-                    Text("\(inflected) 是 \(entry?.headword ?? "") 的变形").font(.caption).foregroundStyle(.secondary)
-                }
                 if let entry {
                     ScrollView {
-                        Text(entry.definition).font(.callout).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                        VStack(alignment: .leading, spacing: 10) {
+                            summary(entry)
+                            if isExpanded { details(entry) }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
                     }
-                    .frame(maxHeight: 132)
+                    .frame(maxHeight: isExpanded ? 340 : 160)
                     .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text(selection.text.contains(" ") ? "离线词典只收录单词，查不到词组。"
+                    Text(selection.text.contains(" ") ? "离线词典里没有这个词组。"
                          : isLikelyName ? "离线词典里没有这个词，它可能是人名或地名。" : "离线词典里没有这个词。")
                         .font(.callout).foregroundStyle(.secondary)
                 }
@@ -674,6 +687,13 @@ struct LookupCard: View {
                     Label("分享", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
                 }
                 .accessibilityIdentifier("share-selection")
+                if entry != nil {
+                    Button { withAnimation(.snappy(duration: 0.25)) { expanded = !isExpanded } } label: {
+                        Label(isExpanded ? "收起" : "展开", systemImage: isExpanded ? "chevron.up" : "chevron.down")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .accessibilityIdentifier("expand-lookup")
+                }
             }
             .font(.subheadline)
             .buttonStyle(.borderless)
@@ -683,6 +703,121 @@ struct LookupCard: View {
         .background(Color(uiColor: palette.chrome), in: RoundedRectangle(cornerRadius: 20))
         .tint(.accent)
         .accessibilityIdentifier("lookup-card")
+    }
+
+    /// What the card always shows: the short definition and how the tapped form relates to it.
+    @ViewBuilder private func summary(_ entry: DictionaryEntry) -> some View {
+        if let inflected = entry.inflectedFrom, inflected.lowercased() != entry.headword.lowercased() {
+            let kinds = entry.forms.filter { $0.word.lowercased() == inflected.lowercased() }.map { DictionaryEntry.Form.title($0.kind) }
+            Text(kinds.isEmpty ? "\(inflected) 是 \(entry.headword) 的变形" : "\(inflected) 是 \(entry.headword) 的\(kinds.joined(separator: "、"))")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        Text(entry.definition).font(.callout)
+        if let own = entry.ownSense, let inflected = entry.inflectedFrom {
+            (Text("\(inflected) 本身：").foregroundStyle(.secondary) + Text(own.replacingOccurrences(of: "\n", with: "  ")))
+                .font(.footnote)
+        }
+    }
+
+    @ViewBuilder private func details(_ entry: DictionaryEntry) -> some View {
+        let more = entry.moreTranslation
+        if !more.isEmpty { Text(more).font(.callout) }
+        if !entry.englishDefinition.isEmpty {
+            section("英文释义") { Text(entry.englishDefinition).font(.callout) }
+        }
+        let forms = entry.formLabels
+        if !forms.isEmpty {
+            section("词形") { Text(forms.joined(separator: " · ")).font(.callout) }
+        }
+        let labels = entry.levelLabels
+        if !labels.isEmpty {
+            section("等级") { Text(labels.joined(separator: " · ")).font(.callout) }
+        }
+        let phrases = WordDictionary.shared.phrases(startingWith: entry.headword)
+        if !phrases.isEmpty {
+            section("短语") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(phrases, id: \.headword) { phrase in phraseRow(phrase) }
+                }
+            }
+        }
+        Text("来源：ECDICT · \(entry.source)").font(.caption2).foregroundStyle(.secondary)
+    }
+
+    private func phraseRow(_ phrase: DictionaryEntry) -> some View {
+        let open = openPhrases.contains(phrase.headword)
+        return Button {
+            if open { openPhrases.remove(phrase.headword) } else { openPhrases.insert(phrase.headword) }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(phrase.headword).font(.callout.weight(.medium))
+                Text(open ? phrase.definition : phrase.definition.replacingOccurrences(of: "\n", with: "  "))
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .lineLimit(open ? nil : 1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func section(_ title: LocalizedStringKey, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            content()
+        }
+    }
+}
+
+extension DictionaryEntry.Form {
+    static func title(_ kind: String) -> String {
+        switch kind {
+        case "p": String(localized: "过去式")
+        case "d": String(localized: "过去分词")
+        case "i": String(localized: "现在分词")
+        case "3": String(localized: "第三人称单数")
+        case "r": String(localized: "比较级")
+        case "t": String(localized: "最高级")
+        case "s": String(localized: "复数")
+        default: kind
+        }
+    }
+}
+
+extension DictionaryEntry {
+    /// "过去式/过去分词 peeped", one item per distinct form.
+    var formLabels: [String] {
+        var order: [String] = []
+        var kinds: [String: [String]] = [:]
+        for form in forms {
+            if kinds[form.word] == nil { order.append(form.word) }
+            kinds[form.word, default: []].append(Form.title(form.kind))
+        }
+        return order.map { "\(kinds[$0]!.joined(separator: "/")) \($0)" }
+    }
+
+    /// Exam lists the word is on, Collins stars and the Oxford 3000 mark.
+    var levelLabels: [String] {
+        let exams: [(String, String)] = [("zk", "中考"), ("gk", "高考"), ("cet4", "四级"), ("cet6", "六级"), ("ky", "考研"),
+                                         ("ielts", "雅思"), ("toefl", "托福"), ("gre", "GRE")]
+        var labels = exams.filter { tags.contains($0.0) }.map { String(localized: String.LocalizationValue($0.1)) }
+        if collins > 0 { labels.append(String(localized: "柯林斯") + " " + String(repeating: "★", count: collins)) }
+        if isOxford3000 { labels.append(String(localized: "牛津 3000")) }
+        return labels
+    }
+}
+
+/// Reads a word aloud with the system's offline voices.
+@MainActor
+enum Pronunciation {
+    private static let synthesizer = AVSpeechSynthesizer()
+
+    static func speak(_ text: String) {
+        let accent = UserDefaults.standard.string(forKey: "dictionaryAccent") ?? "en-US"
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: accent)
+        synthesizer.stopSpeaking(at: .immediate)
+        synthesizer.speak(utterance)
     }
 }
 

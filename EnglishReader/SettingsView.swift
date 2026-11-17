@@ -247,7 +247,7 @@ struct AboutView: View {
                 Text("书籍、阅读位置和生词都只保存在这台设备上，不会上传。删除应用会一并删除。")
             } header: { Text("数据") }
             Section {
-                Text("释义来自内置的离线英汉词典 ECDICT（MIT 许可）。")
+                Text("释义来自离线英汉词典 ECDICT（MIT 许可）。")
                 Text("示例书节选自 Project Gutenberg 的公版《爱丽丝梦游仙境》。")
             } header: { Text("致谢") }
         }

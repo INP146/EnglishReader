@@ -20,9 +20,9 @@ The sample is bundled in the application; importing and reading do not make netw
 
 ## Offline English–Chinese dictionary
 
-`EnglishReader/Resources/dictionary.sqlite` is a subset of **ECDICT** by Linwei (skywind3000): https://github.com/skywind3000/ECDICT (`ecdict.csv`, downloaded 2026-11-16).
+`EnglishReader/Resources/dictionary-core.sqlite` (the core pack) is built from **ECDICT** by Linwei (skywind3000): https://github.com/skywind3000/ECDICT (`ecdict.csv`, downloaded 2026-11-17).
 
-Rebuild with `Tools/build-dictionary.py`. The subset keeps single English words that have a Chinese translation and are common (exam-tagged, Collins/Oxford-marked, or within the top 60,000 by BNC/frequency rank), plus inflected forms mapped to their base word from ECDICT's `exchange` field. Each definition keeps at most four lines; “[网络]” web senses are dropped when a dictionary sense exists. The app reads it locally and never makes network requests. The license is credited in the app's 阅读设置 › 关于.
+`Tools/build-dictionary.py` splits ECDICT into packs that combine as a union: the bundled core (common single words — exam-tagged, Collins/Oxford-marked, or within the top 60,000 by BNC/frequency rank — their inflections, and general phrases made of common words), plus downloadable packs for the remaining general vocabulary, eight subject fields (by ECDICT's “[医]”-style labels) and names. Each entry keeps its full Chinese translation, English definition, exam tags, Collins stars, Oxford 3000 mark and inflections; the core also carries the inflection-to-base-word table. The app reads packs locally; the core never needs the network. The license is credited in the app's 设置 › 关于.
 
 ECDICT license:
 

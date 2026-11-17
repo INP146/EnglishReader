@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 import UIKit
 @testable import EnglishReader
@@ -219,6 +220,89 @@ struct DictionaryTests {
         #expect(dictionary.lookup("Alice") == nil) // Not the acronym ALICE.
         #expect(dictionary.lookup("marmalade")?.definition.contains("果酱") == true)
         #expect(dictionary.headword(for: "peeped") == "peep")
+    }
+
+    @Test func coreCarriesPhrasesAndTheirInflections() throws {
+        let dictionary = WordDictionary.shared
+        #expect(dictionary.lookup("give up")?.definition.contains("放弃") == true)
+        let gaveUp = try #require(dictionary.lookup("Gave  up"))
+        #expect(gaveUp.headword == "give up" && gaveUp.inflectedFrom == "gave up")
+        #expect(dictionary.headword(for: "gave up") == "give up")
+        #expect(dictionary.lookup("a fly in the ointment") != nil)
+        let phrases = dictionary.phrases(startingWith: "take").map(\.headword)
+        #expect(phrases.contains("take after"))
+        #expect(phrases.allSatisfy { $0.hasPrefix("take ") })
+    }
+
+    @Test func entriesCarryTheExpandedFields() throws {
+        let dictionary = WordDictionary.shared
+        let go = try #require(dictionary.lookup("go"))
+        #expect(go.forms.contains { $0.kind == "p" && $0.word == "went" })
+        #expect(go.collins == 5 && go.isOxford3000 && go.tags.contains("gk"))
+        #expect(go.source == "核心词典")
+        #expect(dictionary.lookup("marmalade")?.englishDefinition.contains("citrus") == true)
+        // The short definition keeps at most four lines and leaves web senses to the expanded card.
+        let off = try #require(dictionary.lookup("off"))
+        #expect(off.definition.split(separator: "\n").count == 4 && !off.moreTranslation.isEmpty)
+        let be = try #require(dictionary.lookup("be"))
+        #expect(!be.definition.contains("[计]") && be.moreTranslation.contains("[计]"))
+        #expect(dictionary.lookup("into")?.englishDefinition.contains("variety of applications") == true)
+        let aboutTurn = try #require(dictionary.lookup("about turn"))
+        #expect(!aboutTurn.definition.contains("[网络]") && aboutTurn.moreTranslation.hasPrefix("[网络]"))
+    }
+
+    @Test func formsWithMeaningsOfTheirOwnKeepThem() throws {
+        let dictionary = WordDictionary.shared
+        let found = try #require(dictionary.lookup("found"))
+        #expect(found.headword == "find" && found.inflectedFrom == "found")
+        #expect(found.ownSense?.contains("建立") == true && found.ownSense?.contains("find") == false)
+        #expect(dictionary.lookup("peeped")?.ownSense == nil)
+        #expect(dictionary.lookup("went")?.ownSense == nil)
+        #expect(WordDictionary.withoutInflectionNotes("v. 窥视( peep的过去式和过去分词 ); 偷看\nfind的过去式和过去分词")
+                == "v. 窥视; 偷看")
+    }
+
+    @Test func packsCombineAsAUnionAndKeysIgnoreWhichAreInstalled() throws {
+        let folder = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let core = folder.appendingPathComponent("core.sqlite")
+        let downloads = folder.appendingPathComponent("packs", isDirectory: true)
+        try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+        try makePack(at: core, id: "core", order: 0, entries: [("abdicates", "abdicate的第三人称单数")], forms: [("abdicates", "abdicate")])
+        try makePack(at: downloads.appendingPathComponent("old.sqlite"), id: "old", order: 5, entries: [("abdicate", "旧")], schema: 1)
+
+        let coreOnly = WordDictionary(core: core, directory: downloads)
+        #expect(coreOnly.packs.map(\.id) == ["core"]) // The wrong schema is ignored.
+        let fallback = try #require(coreOnly.lookup("abdicates"))
+        #expect(fallback.headword == "abdicate" && fallback.inflectedFrom == "abdicates" && fallback.source == "core")
+
+        try makePack(at: downloads.appendingPathComponent("extended.sqlite"), id: "extended", order: 10,
+                     entries: [("abdicate", "vt. 退位"), ("abdicate the throne", "让位")])
+        let union = WordDictionary(core: core, directory: downloads)
+        #expect(union.packs.map(\.id) == ["core", "extended"])
+        let full = try #require(union.lookup("abdicates"))
+        #expect(full.headword == "abdicate" && full.definition == "vt. 退位" && full.source == "extended")
+        #expect(union.headword(for: "abdicates") == coreOnly.headword(for: "abdicates"))
+        #expect(union.phrases(startingWith: "abdicate").map(\.headword) == ["abdicate the throne"])
+    }
+
+    private func makePack(at url: URL, id: String, order: Int, entries: [(String, String)],
+                          forms: [(String, String)] = [], schema: Int = DictionaryPack.schema) throws {
+        var database: OpaquePointer?
+        guard sqlite3_open(url.path, &database) == SQLITE_OK else { throw CocoaError(.fileWriteUnknown) }
+        defer { sqlite3_close(database) }
+        var sql = """
+            CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE entry(key TEXT PRIMARY KEY, word TEXT, phonetic TEXT, translation TEXT, definition TEXT, tags TEXT,
+                               collins INTEGER, oxford INTEGER, rank INTEGER, forms TEXT);
+            CREATE TABLE form(form TEXT PRIMARY KEY, lemma TEXT);
+            INSERT INTO meta VALUES ('schema', '\(schema)'), ('id', '\(id)'), ('title', '\(id)'), ('order', '\(order)');
+            """
+        for (word, translation) in entries {
+            sql += "INSERT INTO entry VALUES ('\(word)', '\(word)', '', '\(translation)', '', '', 0, 0, 10000000, '');"
+        }
+        for (form, lemma) in forms { sql += "INSERT INTO form VALUES ('\(form)', '\(lemma)');" }
+        guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else { throw CocoaError(.fileWriteUnknown) }
     }
 }
 
