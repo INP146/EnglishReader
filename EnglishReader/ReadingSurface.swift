@@ -570,11 +570,23 @@ enum ReaderTextTools {
 
     /// The bounding box of the range's glyphs in window coordinates, which SwiftUI calls global.
     static func windowRect(for range: NSRange, in view: UITextView) -> CGRect? {
-        guard view.window != nil,
-              let start = view.position(from: view.beginningOfDocument, offset: range.location),
-              let end = view.position(from: start, offset: range.length),
-              let textRange = view.textRange(from: start, to: end) else { return nil }
-        let rects = view.selectionRects(for: textRange).map(\.rect).filter { !$0.isNull && !$0.isEmpty }
+        guard view.window != nil else { return nil }
+        var rects: [CGRect] = []
+        if view.textLayoutManager == nil {
+            // Pages share one layout manager, one container each; UITextInput only measures the first page right.
+            let manager = view.layoutManager, container = view.textContainer
+            let glyphs = NSIntersectionRange(manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil),
+                                             manager.glyphRange(for: container))
+            guard glyphs.length > 0 else { return nil }
+            manager.enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                            in: container) { rect, _ in rects.append(rect) }
+            rects = rects.map { $0.offsetBy(dx: view.textContainerInset.left, dy: view.textContainerInset.top) }
+        } else if let start = view.position(from: view.beginningOfDocument, offset: range.location),
+                  let end = view.position(from: start, offset: range.length),
+                  let textRange = view.textRange(from: start, to: end) {
+            rects = view.selectionRects(for: textRange).map(\.rect)
+        }
+        rects = rects.filter { !$0.isNull && !$0.isEmpty }
         guard let first = rects.first else { return nil }
         return view.convert(rects.dropFirst().reduce(first) { $0.union($1) }, to: nil)
     }
