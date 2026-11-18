@@ -637,12 +637,14 @@ struct LookupCard: View {
     private var isTranslationOnly: Bool { entry == nil && isExpression }
 
     private var translationRequest: TranslationRequest {
-        wordCount == 1 ? .explain(word: selection.text, sentence: selection.sentence) : .translate(selection.text)
+        if wordCount == 1 { return .explain(word: selection.text, sentence: selection.sentence) }
+        let context = selection.sentence.isEmpty || selection.sentence == selection.text ? nil : selection.sentence
+        return .translate(selection.text, context: context)
     }
 
     private var savedTranslation: (text: String, source: String)? {
         guard let translation, translation.isFinal else { return nil }
-        return (translation.text, "机器翻译 · \(translation.engine.title)")
+        return (translation.text, "机器翻译 · \(translation.providerTitle)")
     }
 
     private var isLikelyName: Bool {
@@ -743,13 +745,13 @@ struct LookupCard: View {
     @ViewBuilder private var translationView: some View {
         if let translation {
             // A word translated on its own, out of context, is a guess; keep it quieter than a definition.
-            let isGuess = !isExpression && !TranslationService.shared.engine(translation.engine).capabilities.contains(.explain)
+            let isGuess = !isExpression && !translation.canExplain
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(translation.text).font(.callout)
                         .foregroundStyle(isGuess ? .secondary : .primary)
                         .accessibilityIdentifier("translation")
-                    Text("机器翻译 · \(translation.engine.title)").font(.caption2).foregroundStyle(.secondary)
+                    Text("机器翻译 · \(translation.providerTitle)").font(.caption2).foregroundStyle(.secondary)
                     if let notice = translation.notice {
                         Text(notice).font(.caption2).foregroundStyle(.secondary)
                     }

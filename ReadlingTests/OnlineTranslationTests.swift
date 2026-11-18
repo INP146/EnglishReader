@@ -85,7 +85,7 @@ struct ServerSentEventsTests {
     }
 }
 
-@Suite("OpenAI-compatible engine")
+@Suite("OpenAI-compatible format")
 struct OpenAICompatibleEngineTests {
     private func configuration(_ host: String, key: String? = "sk-test1234") -> OpenAICompatibleEngine.Configuration {
         .init(baseURL: URL(string: "https://\(host)/v1")!, key: key, model: "some-model")
@@ -104,6 +104,14 @@ struct OpenAICompatibleEngineTests {
         var all: [String] = []
         for try await text in engine.run(request) { all.append(text) }
         return all
+    }
+
+    @Test func normalizesEndpointAddresses() {
+        #expect(OpenAICompatibleEngine.endpointURL("https://api.openai.com/v1")?.absoluteString == "https://api.openai.com/v1/chat/completions")
+        #expect(OpenAICompatibleEngine.endpointURL("http://192.168.1.5:11434")?.absoluteString == "http://192.168.1.5:11434/v1/chat/completions")
+        #expect(OpenAICompatibleEngine.endpointURL("https://relay.example.com/v1/chat/completions/")?.absoluteString == "https://relay.example.com/v1/chat/completions")
+        #expect(OpenAICompatibleEngine.endpointURL("https://ark.example.com/api/v3")?.absoluteString == "https://ark.example.com/api/v3/chat/completions")
+        #expect(OpenAICompatibleEngine.endpointURL("api.example.com/v1") == nil)
     }
 
     @Test func buildsAStreamingChatRequest() async throws {
@@ -191,31 +199,222 @@ struct OpenAICompatibleEngineTests {
         #expect(request.url?.absoluteString == "https://\(host)/v1/models")
         #expect(request.httpMethod == "GET")
     }
+}
 
-    @Test func readsSavedSettings() throws {
-        let defaults = try #require(UserDefaults(suiteName: "OpenAICompatibleEngineTests"))
-        defaults.removePersistentDomain(forName: "OpenAICompatibleEngineTests")
-        let keychain = TranslationKeychain(service: "com.inp146.readling.tests.\(UUID().uuidString)")
-        #expect(OpenAICompatibleEngine.saved(defaults: defaults, keychain: keychain) == nil)
-        defaults.set("some-model", forKey: OpenAICompatibleEngine.modelKey)
-        #expect(OpenAICompatibleEngine.saved(defaults: defaults, keychain: keychain)
-                == .init(baseURL: URL(string: OpenAICompatibleEngine.defaultBaseURL)!, key: nil, model: "some-model"))
-        defaults.set("api.example.com/v1", forKey: OpenAICompatibleEngine.baseURLKey)
-        #expect(OpenAICompatibleEngine.saved(defaults: defaults, keychain: keychain) == nil)
+@Suite("Claude format")
+struct ClaudeEngineTests {
+    private func configuration(_ host: String, key: String? = "sk-ant-test") -> ClaudeEngine.Configuration {
+        .init(baseURL: URL(string: "https://\(host)/v1")!, key: key, model: "claude-sonnet-test")
+    }
+
+    private func sse(_ deltas: [String], stop: Bool = true) -> Data {
+        var text = "event: message_start\ndata: {\"type\":\"message_start\"}\n\n"
+        text += "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hmm\"}}\n\n"
+        for delta in deltas {
+            let json = try! JSONSerialization.data(withJSONObject: [
+                "type": "content_block_delta",
+                "delta": ["type": "text_delta", "text": delta],
+            ])
+            text += "event: content_block_delta\ndata: \(String(decoding: json, as: UTF8.self))\n\n"
+        }
+        if stop { text += "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n" }
+        return Data(text.utf8)
+    }
+
+    private func run(_ engine: ClaudeEngine, _ request: TranslationRequest = .translate("Hello there.")) async throws -> [String] {
+        var all: [String] = []
+        for try await text in engine.run(request) { all.append(text) }
+        return all
+    }
+
+    @Test func normalizesCustomAndOfficialAddresses() {
+        #expect(ClaudeEngine.endpointURL("https://api.anthropic.com")?.absoluteString == "https://api.anthropic.com/v1/messages")
+        #expect(ClaudeEngine.endpointURL("https://api.anthropic.com/v1")?.absoluteString == "https://api.anthropic.com/v1/messages")
+        #expect(ClaudeEngine.endpointURL("https://relay.example.com/anthropic")?.absoluteString == "https://relay.example.com/anthropic/v1/messages")
+        #expect(ClaudeEngine.endpointURL("https://relay.example.com/v1/messages")?.absoluteString == "https://relay.example.com/v1/messages")
+    }
+
+    @Test func buildsAStreamingMessagesRequest() async throws {
+        let host = "claude-build.test"
+        let session = StubURLProtocol.session(host: host, reply: .init(body: sse(["好"])))
+        _ = try await run(ClaudeEngine(configuration: configuration(host), session: session),
+                          .explain(word: "hare", sentence: "The March Hare said."))
+        let (request, body) = try #require(StubURLProtocol.request(host: host))
+        #expect(request.url?.absoluteString == "https://\(host)/v1/messages")
+        #expect(request.httpMethod == "POST")
+        #expect(request.value(forHTTPHeaderField: "x-api-key") == "sk-ant-test")
+        #expect(request.value(forHTTPHeaderField: "anthropic-version") == "2023-06-01")
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["model"] as? String == "claude-sonnet-test")
+        #expect(json["stream"] as? Bool == true)
+        #expect((json["max_tokens"] as? Int ?? 0) > 0)
+        #expect((json["system"] as? String)?.isEmpty == false)
+        let messages = try #require(json["messages"] as? [[String: String]])
+        #expect(messages == [["role": "user", "content": "<word>hare</word>\n<sentence>The March Hare said.</sentence>"]])
+    }
+
+    @Test func streamsTextDeltasAndStopsAtMessageStop() async throws {
+        let host = "claude-stream.test"
+        var body = sse(["你", "好"])
+        body.append(Data("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"extra\"}}\n\n".utf8))
+        let session = StubURLProtocol.session(host: host, reply: .init(body: body))
+        #expect(try await run(ClaudeEngine(configuration: configuration(host), session: session)) == ["你", "你好"])
+    }
+
+    @Test func reportsMidStreamErrorEvent() async throws {
+        let host = "claude-error.test"
+        var body = sse(["半"], stop: false)
+        body.append(Data("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n".utf8))
+        let session = StubURLProtocol.session(host: host, reply: .init(body: body))
+        await #expect(throws: TranslationFailure.failed("Overloaded")) {
+            _ = try await run(ClaudeEngine(configuration: configuration(host), session: session))
+        }
+    }
+
+    @Test func listsModelsFromCustomEndpoint() async throws {
+        let host = "claude-models.test"
+        let body = Data(#"{"data":[{"id":"claude-opus"},{"id":"claude-haiku"}]}"#.utf8)
+        let session = StubURLProtocol.session(host: host, reply: .init(body: body))
+        let models = try await ClaudeEngine.models(configuration(host), session: session)
+        #expect(models == ["claude-haiku", "claude-opus"])
+        let (request, _) = try #require(StubURLProtocol.request(host: host))
+        #expect(request.url?.absoluteString == "https://\(host)/v1/models?limit=100")
+        #expect(request.value(forHTTPHeaderField: "x-api-key") == "sk-ant-test")
+    }
+}
+
+@Suite("Gemini format")
+struct GeminiEngineTests {
+    private func configuration(_ host: String, model: String = "gemini-2.5-flash") -> GeminiEngine.Configuration {
+        .init(baseURL: URL(string: "https://\(host)/v1beta")!, key: "gem-key", model: model)
+    }
+
+    private func sse(_ chunks: [[[String: Any]]]) -> Data {
+        let text = chunks.map { parts -> String in
+            let json = try! JSONSerialization.data(withJSONObject: ["candidates": [["content": ["role": "model", "parts": parts]]]])
+            return "data: \(String(decoding: json, as: UTF8.self))\n\n"
+        }.joined()
+        return Data(text.utf8)
+    }
+
+    private func run(_ engine: GeminiEngine, _ request: TranslationRequest = .translate("Hello there.")) async throws -> [String] {
+        var all: [String] = []
+        for try await text in engine.run(request) { all.append(text) }
+        return all
+    }
+
+    @Test func normalizesCustomAndOfficialAddresses() {
+        #expect(GeminiEngine.endpointURL("https://generativelanguage.googleapis.com", model: "gemini-2.5-flash")?.absoluteString
+                == "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+        #expect(GeminiEngine.endpointURL("https://relay.example.com/v1", model: "models/gemini-2.5-flash")?.absoluteString
+                == "https://relay.example.com/v1/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+    }
+
+    @Test func buildsAStreamGenerateContentRequestAndSkipsThoughts() async throws {
+        let host = "gemini-build.test"
+        let bodyData = sse([
+            [["text": "internal reasoning", "thought": true]],
+            [["text": "你"]],
+            [["text": "好"]],
+        ])
+        let session = StubURLProtocol.session(host: host, reply: .init(body: bodyData))
+        let streamed = try await run(GeminiEngine(configuration: configuration(host, model: "models/gemini-2.5-flash"), session: session))
+        #expect(streamed == ["你", "你好"])
+        let (request, body) = try #require(StubURLProtocol.request(host: host))
+        #expect(request.url?.absoluteString == "https://\(host)/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+        #expect(request.httpMethod == "POST")
+        #expect(request.value(forHTTPHeaderField: "x-goog-api-key") == "gem-key")
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let system = try #require((json["systemInstruction"] as? [String: Any])?["parts"] as? [[String: String]])
+        #expect(system.first?["text"]?.isEmpty == false)
+        let contents = try #require(json["contents"] as? [[String: Any]])
+        #expect(contents.first?["role"] as? String == "user")
+        let parts = try #require(contents.first?["parts"] as? [[String: String]])
+        #expect(parts == [["text": "<text>\nHello there.\n</text>"]])
+    }
+
+    @Test func listsGenerativeModelsWithoutPrefix() async throws {
+        let host = "gemini-models.test"
+        let body = Data("""
+        {"models":[
+          {"name":"models/gemini-2.5-pro","supportedGenerationMethods":["generateContent","streamGenerateContent"]},
+          {"name":"models/gemini-2.5-flash","supportedGenerationMethods":["generateContent"]},
+          {"name":"models/text-embedding-004","supportedGenerationMethods":["embedContent"]}
+        ]}
+        """.utf8)
+        let session = StubURLProtocol.session(host: host, reply: .init(body: body))
+        let models = try await GeminiEngine.models(configuration(host), session: session)
+        #expect(models == ["gemini-2.5-flash", "gemini-2.5-pro"])
+        let (request, _) = try #require(StubURLProtocol.request(host: host))
+        #expect(request.url?.absoluteString == "https://\(host)/v1beta/models?pageSize=1000")
+        #expect(request.value(forHTTPHeaderField: "x-goog-api-key") == "gem-key")
+    }
+}
+
+@Suite("DeepL format")
+struct DeepLEngineTests {
+    private func run(_ engine: DeepLEngine, _ request: TranslationRequest) async throws -> [String] {
+        var all: [String] = []
+        for try await text in engine.run(request) { all.append(text) }
+        return all
+    }
+
+    @Test func picksFreeProOrCustomHost() {
+        #expect(DeepLEngine.endpointURL("https://api.deepl.com/v2", key: "1234-abcd:fx")?.absoluteString == "https://api-free.deepl.com/v2/translate")
+        #expect(DeepLEngine.endpointURL("https://api-free.deepl.com/v2", key: "1234-abcd")?.absoluteString == "https://api.deepl.com/v2/translate")
+        #expect(DeepLEngine.endpointURL("http://192.168.1.5:1188", key: nil)?.absoluteString == "http://192.168.1.5:1188/v2/translate")
+        #expect(DeepLEngine.configuration(endpoint: .init(name: "", format: .deepL, baseURL: "https://api-free.deepl.com/v2"), key: nil) == nil)
+        #expect(DeepLEngine.configuration(endpoint: .init(name: "DeepLX", format: .deepL, baseURL: "http://192.168.1.5:1188/v2"), key: nil)
+                == .init(baseURL: URL(string: "http://192.168.1.5:1188/v2")!, key: nil))
+    }
+
+    @Test func buildsTranslateRequestWithContext() async throws {
+        let host = "deepl-translate.test"
+        let reply = Data(#"{"translations":[{"detected_source_language":"EN","text":"野兔"}]}"#.utf8)
+        let session = StubURLProtocol.session(host: host, reply: .init(body: reply))
+        let engine = DeepLEngine(configuration: .init(baseURL: URL(string: "https://\(host)/v2")!, key: "dl-key:fx"), session: session)
+        let out = try await run(engine, .translate("Hare", context: "The March Hare said."))
+        #expect(out == ["野兔"])
+        let (request, body) = try #require(StubURLProtocol.request(host: host))
+        #expect(request.url?.absoluteString == "https://\(host)/v2/translate")
+        #expect(request.httpMethod == "POST")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "DeepL-Auth-Key dl-key:fx")
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["text"] as? [String] == ["Hare"])
+        #expect(json["source_lang"] as? String == "EN")
+        #expect(json["target_lang"] as? String == "ZH-HANS")
+        #expect(json["context"] as? String == "The March Hare said.")
+    }
+
+    @Test func omitsContextAndAuthWhenUnsetAndMapsQuotaStatus() async throws {
+        let host = "deepl-quota.test"
+        let errorBody = Data(#"{"message":"Quota exceeded."}"#.utf8)
+        let session = StubURLProtocol.session(host: host, reply: .init(status: 456, body: errorBody))
+        let engine = DeepLEngine(configuration: .init(baseURL: URL(string: "http://\(host)/v2")!, key: nil), session: session)
+        await #expect(throws: TranslationFailure.failed("额度用完或请求太频繁，稍后再试。Quota exceeded.")) {
+            _ = try await run(engine, .translate("Hello there."))
+        }
+        let (request, body) = try #require(StubURLProtocol.request(host: host))
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["context"] == nil)
     }
 }
 
 @Suite("Translation keychain")
 struct TranslationKeychainTests {
-    @Test func savesReplacesAndDeletesAKey() throws {
+    @Test func savesReplacesAndDeletesEndpointKeysIndependently() throws {
         let keychain = TranslationKeychain(service: "com.inp146.readling.tests.\(UUID().uuidString)")
-        #expect(keychain.key(for: .openAI) == nil)
-        try keychain.setKey("first", for: .openAI)
-        try keychain.setKey("second", for: .openAI)
-        #expect(keychain.key(for: .openAI) == "second")
-        #expect(keychain.key(for: .apple) == nil)
-        try keychain.deleteKey(for: .openAI)
-        #expect(keychain.key(for: .openAI) == nil)
-        try keychain.deleteKey(for: .openAI)
+        let first = UUID(), second = UUID()
+        #expect(keychain.key(for: first) == nil)
+        try keychain.setKey("key-1", for: first)
+        try keychain.setKey("key-1b", for: first)
+        try keychain.setKey("key-2", for: second)
+        #expect(keychain.key(for: first) == "key-1b")
+        #expect(keychain.key(for: second) == "key-2")
+        try keychain.deleteKey(for: first)
+        #expect(keychain.key(for: first) == nil)
+        #expect(keychain.key(for: second) == "key-2")
+        try keychain.deleteKey(for: first)
     }
 }

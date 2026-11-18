@@ -24,8 +24,12 @@
     _app.launchArguments = @[@"-freshLibrary", @"-readerPageTurn", turn, @"-readerFont", @"30", @"-readerTipSeen", @"YES"];
     [_app launch];
     [[_app.buttons matchingPredicate:[NSPredicate predicateWithFormat:@"identifier BEGINSWITH 'book-'"]].firstMatch tap];
-    [_app.buttons[@"open-chapters"] tap];
-    [[_app.collectionViews.cells elementBoundByIndex:1] tap];
+    XCUIElement *chapters = _app.buttons[@"open-chapters"];
+    XCTAssertTrue([chapters waitForExistenceWithTimeout:3]);
+    [chapters tap];
+    XCUIElement *second = [_app.collectionViews.cells elementBoundByIndex:1];
+    XCTAssertTrue([second waitForExistenceWithTimeout:3]);
+    [second tap];
     [[self at:0.5 y:0.5] tap]; // Puts the toolbars away.
     [NSThread sleepForTimeInterval:1];
 

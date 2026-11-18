@@ -24,15 +24,19 @@
 - 词典查到时也可以手动请求语境释义，作为展开区里的一个区块。这放在后面的步骤，收起态不变（与 `dictionary-design.md` 的约定一致）。
 - 底部原来打开系统翻译面板的“翻译”按钮去掉了：译文已经直接显示在单词卡里，语言包下载也在卡片里完成。
 
-## 引擎
+## 服务与接口格式
 
-| 引擎 | 需要 | 整句翻译 | 语境释义 | 流式输出 | 说明 |
+内置 **Apple 本机翻译**（默认服务、离线可用，也是自定义端点失败时的回退）。联网或局域网服务采用**用户自行管理端点（Endpoint）**的形式：用户可添加任意多个端点（例如同时保留 DeepSeek、Claude 中转站、局域网 Ollama、自建 DeepLX），自行切换当前使用哪一个。
+
+每个自定义端点选择一种**接口格式（API 范式）**，并填写自己的服务地址、可选 API Key 和模型名：
+
+| 接口格式 | 需要 | 整句翻译 | 语境释义 | 流式输出 | 说明 |
 |---|---|---|---|---|---|
-| Apple 本机翻译 | 下载语言包 | ✓ | — | — | 默认引擎，不用配置，没网时也能用 |
-| OpenAI 兼容接口 | 服务地址、Key、模型 | ✓ | ✓ | ✓ | 一个接口覆盖 OpenAI、DeepSeek、通义、Kimi、OpenRouter、局域网 Ollama 等 |
-| Claude | Key、模型 | ✓ | ✓ | ✓ | Messages API，原生接口与 OpenAI 格式不同 |
-| Gemini | Key、模型 | ✓ | ✓ | ✓ | Gemini API（`generativelanguage.googleapis.com`），用 `x-goog-api-key` |
-| DeepL | Key | ✓ | — | — | 免费版 Key 以 `:fx` 结尾，走 `api-free.deepl.com`；用 `context` 参数传入所在句子 |
+| Apple 本机翻译（内置） | 下载语言包 | ✓ | — | — | 默认服务，不用配置，没网时也能用 |
+| OpenAI 兼容 | 服务地址、模型、（可选）Key | ✓ | ✓ | ✓ | `/chat/completions`，覆盖 OpenAI、DeepSeek、通义、Kimi、OpenRouter、OneAPI、局域网 Ollama / vLLM 等 |
+| Claude | 服务地址、模型、（可选）Key | ✓ | ✓ | ✓ | Anthropic Messages API（`/v1/messages`），支持官方地址、兼容 Anthropic 协议的中转站或本地网关 |
+| Gemini | 服务地址、模型、（可选）Key | ✓ | ✓ | ✓ | Gemini REST API（`:streamGenerateContent?alt=sse`，`x-goog-api-key`），支持官方或自定义网关 |
+| DeepL | 服务地址、（官方必填）Key | ✓ | — | — | `/v2/translate`；官方域名按 `:fx` 后缀自动分流免费/付费地址，也可填自建 DeepLX 地址；用 `context` 传入原句 |
 
 不做的：
 
@@ -100,15 +104,16 @@ protocol TranslationEngine {
 
 放在“设置”里“词典”下面：
 
-- **翻译引擎**：单选，Apple 本机翻译 / OpenAI 兼容 / Claude / Gemini / DeepL。未配置的引擎显示“未配置”，选中时进入配置页。
-- **查不到时自动翻译**：开关，默认开。
-- **各引擎配置页**：
-  - OpenAI 兼容：服务地址（默认 `https://api.openai.com/v1`）、API Key、模型（获取列表或手填）
-  - Claude、Gemini：API Key、模型
-  - DeepL：API Key
-  - 共有：“测试”按钮（发一句短文本，显示结果或错误）、“删除 Key”
+- **翻译服务**：列出内置的 `Apple 本机翻译` 与用户保存的全部自定义端点，点按即切换当前生效的服务；点端点右侧信息图标（或左滑 / 长按）可编辑或删除端点；底部提供 **“添加端点…”**。
+- **添加 / 编辑端点**（弹窗表单）：
+  - **名称**（可选，留空自动取“接口格式 + 域名”）、**接口格式**（OpenAI 兼容 / Claude / Gemini / DeepL）、**填入常用预设**菜单
+  - **服务地址**：支持任意 `https://` 或 `http://` 地址，页脚实时预览最终拼接出的完整请求地址
+  - **API Key**：按端点 `UUID` 独立存入本机 Keychain；局域网无鉴权服务可留空
+  - **模型**（OpenAI 兼容 / Claude / Gemini）：支持直接从当前填写的端点拉取模型列表并搜索选择，也可手填
+  - **测试**按钮（直接用表单当前草稿发请求验证）、编辑态下的**删除端点**按钮
 - **Apple 本机翻译**：显示语言包状态，未下载时提供下载入口。
-- **页脚：联网说明**：使用联网引擎时，选中的文字和所在句子会发给所选服务商，按服务商自己的隐私政策处理；书的其余内容和生词本不上传。“关于”页和 `SOURCE.md` 同步改写。
+- **查不到时自动翻译**：开关，默认开。
+- **页脚：联网说明**：使用自定义端点时，选中的文字和所在句子会发给该端点，书的其余内容和生词本不上传。“关于”页和 `SOURCE.md` 同步改写。
 
 ### Key 的存放
 
@@ -137,5 +142,5 @@ protocol TranslationEngine {
 
 - [x] 第 1 步：`TranslationEngine` 协议与 `TranslationService`、Apple 本机引擎、单词卡内联译文与句子样式、收藏表达并保存译文、设置 › 翻译（语言包状态与下载、自动翻译开关）、桩引擎与 UI 测试（2026-11-18）
 - [x] 第 2 步：SSE 解析、OpenAI 兼容引擎、Keychain、设置 › 翻译与配置页（含获取模型列表、测试）、联网说明（2026-11-18，已在重签安装的真机上试过）
-- [ ] 第 3 步：Claude、Gemini、DeepL 引擎
+- [x] 第 3 步：改为用户自管理端点（Endpoint）架构，支持添加/编辑/删除任意多个端点，可选 OpenAI 兼容 / Claude / Gemini / DeepL 四种接口格式与自定义地址（含本地无鉴权服务、实时请求地址预览与旧配置自动迁移）（2026-11-19）
 - [ ] 以后：查到时的语境释义、本机大模型、目标语言

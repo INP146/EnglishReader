@@ -244,40 +244,36 @@ private struct ReaderThemeSwatch: View {
 // MARK: Translation
 
 struct TranslationSettingsView: View {
-    @AppStorage(TranslationService.engineKey) private var engine: TranslationEngineID = .apple
     @AppStorage(TranslationService.automaticKey) private var automatic = true
-    /// Watched so the engine rows refresh after the configuration page changes it.
-    @AppStorage(OpenAICompatibleEngine.modelKey) private var openAIModel = ""
     @State private var status: LanguageAvailability.Status?
     @State private var download: TranslationSession.Configuration?
-    @State private var configuring: TranslationEngineID?
+    @State private var editing: EndpointEditorView.Mode?
+    private let service = TranslationService.shared
 
     var body: some View {
         SettingsList {
             Section {
-                ForEach(TranslationEngineID.selectable, id: \.self) { id in
-                    Button { select(id) } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(id.title).foregroundStyle(Color.primary)
-                                if let detail = detail(id) {
-                                    Text(detail).font(.caption).foregroundStyle(Color.secondary)
-                                }
-                            }
-                            Spacer()
-                            if engine == id { Image(systemName: "checkmark").fontWeight(.semibold) }
+                Button { service.selection = .apple } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(TranslationProviderID.appleTitle).foregroundStyle(Color.primary)
+                            Text("本机离线").font(.caption).foregroundStyle(Color.secondary)
+                        }
+                        Spacer()
+                        if service.selection == .apple {
+                            Image(systemName: "checkmark").fontWeight(.semibold)
                         }
                     }
                 }
-            } header: { Text("翻译引擎") } footer: {
-                Text("联网引擎没有配置好、请求失败或没有网络时，改用 Apple 本机翻译。")
-            }
-            Section {
-                NavigationLink { OpenAIEngineSettingsView() } label: {
-                    LabeledContent(TranslationEngineID.openAI.title, value: OpenAICompatibleEngine.saved() == nil ? "未配置" : "已配置")
+                ForEach(service.endpoints) { endpoint in
+                    endpointRow(endpoint)
                 }
-            } header: { Text("联网引擎") } footer: {
-                Text("使用联网引擎时，选中的文字和所在的句子会发给你选择的服务商，按服务商自己的隐私政策处理；书的其余内容和生词本不会上传。API Key 由你自己提供，费用由服务商向你收取。")
+                Button { editing = .new } label: {
+                    Label("添加端点…", systemImage: "plus")
+                }
+                .accessibilityIdentifier("add-endpoint")
+            } header: { Text("翻译服务") } footer: {
+                Text("添加第三方 API、中转站或局域网服务作为端点，并选择由哪个服务翻译。使用自定义端点时，选中的文字和所在的句子会发给该端点，书的其余内容和生词本不会上传。所选端点请求失败或没有网络时，自动改用 Apple 本机翻译。")
             }
             Section {
                 LabeledContent("英语 → 简体中文") {
@@ -301,7 +297,9 @@ struct TranslationSettingsView: View {
         }
         .navigationTitle("翻译")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(item: $configuring) { _ in OpenAIEngineSettingsView() }
+        .sheet(item: $editing) { mode in
+            NavigationStack { EndpointEditorView(mode: mode) }
+        }
         .task(id: download == nil) { status = await AppleTranslationEngine.status() }
         .translationTask(download) { session in
             try? await session.prepareTranslation()
@@ -310,95 +308,193 @@ struct TranslationSettingsView: View {
         }
     }
 
-    private func detail(_ id: TranslationEngineID) -> String? {
-        switch id {
-        case .openAI: OpenAICompatibleEngine.saved().map(\.model) ?? String(localized: "未配置")
-        default: nil
+    private func endpointRow(_ endpoint: TranslationEndpoint) -> some View {
+        let isSelected = service.selection == .endpoint(endpoint.id)
+        return HStack(spacing: 12) {
+            Button { service.selection = .endpoint(endpoint.id) } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: endpoint.displayName).foregroundStyle(Color.primary)
+                        Text(verbatim: endpoint.subtitle).font(.caption).foregroundStyle(Color.secondary)
+                    }
+                    Spacer()
+                    if isSelected {
+                        Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Color.accent)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button { editing = .existing(endpoint) } label: {
+                Image(systemName: "info.circle").foregroundStyle(Color.accent)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("编辑 \(endpoint.displayName)")
         }
-    }
-
-    /// Picking an engine that isn't set up yet goes straight to its configuration.
-    private func select(_ id: TranslationEngineID) {
-        engine = id
-        if id == .openAI, OpenAICompatibleEngine.saved() == nil { configuring = id }
+        .swipeActions {
+            Button("删除", role: .destructive) { service.removeEndpoint(endpoint.id) }
+            Button("编辑") { editing = .existing(endpoint) }
+        }
+        .contextMenu {
+            Button("编辑", systemImage: "pencil") { editing = .existing(endpoint) }
+            Button("删除", systemImage: "trash", role: .destructive) { service.removeEndpoint(endpoint.id) }
+        }
     }
 }
 
-/// Address, key and model for an OpenAI-compatible service, and a test request.
-struct OpenAIEngineSettingsView: View {
-    @AppStorage(OpenAICompatibleEngine.baseURLKey) private var address = OpenAICompatibleEngine.defaultBaseURL
-    @AppStorage(OpenAICompatibleEngine.modelKey) private var model = ""
-    @State private var savedKey: String?
-    @State private var newKey = ""
-    @State private var keyError: String?
-    @State private var test: Test?
+/// Creates or edits a user-managed translation endpoint: API format, base URL,
+/// optional API key, model name (for LLM formats), and a live test button.
+struct EndpointEditorView: View {
+    enum Mode: Identifiable {
+        case new
+        case existing(TranslationEndpoint)
+
+        var id: String {
+            switch self {
+            case .new: "new"
+            case .existing(let endpoint): endpoint.id.uuidString
+            }
+        }
+    }
+
+    private struct Preset {
+        var name: String
+        var format: TranslationAPIFormat
+        var address: String
+    }
+
+    private static let presets: [Preset] = [
+        .init(name: "OpenAI", format: .openAI, address: "https://api.openai.com/v1"),
+        .init(name: "DeepSeek", format: .openAI, address: "https://api.deepseek.com/v1"),
+        .init(name: "OpenRouter", format: .openAI, address: "https://openrouter.ai/api/v1"),
+        .init(name: "通义千问", format: .openAI, address: "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        .init(name: "Kimi", format: .openAI, address: "https://api.moonshot.cn/v1"),
+        .init(name: "Ollama（局域网）", format: .openAI, address: "http://192.168.1.2:11434/v1"),
+        .init(name: "Claude", format: .claude, address: "https://api.anthropic.com/v1"),
+        .init(name: "Gemini", format: .gemini, address: "https://generativelanguage.googleapis.com/v1beta"),
+        .init(name: "DeepL", format: .deepL, address: "https://api-free.deepl.com/v2"),
+    ]
 
     private enum Test { case running, passed(String), failed(String) }
 
-    /// Well-known services' addresses, to fill in rather than type.
-    private static let services: [(name: String, address: String)] = [
-        ("OpenAI", "https://api.openai.com/v1"),
-        ("DeepSeek", "https://api.deepseek.com/v1"),
-        ("OpenRouter", "https://openrouter.ai/api/v1"),
-        ("通义千问", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-        ("Kimi", "https://api.moonshot.cn/v1"),
-    ]
+    let mode: Mode
+    @Environment(\.dismiss) private var dismiss
+    @State private var endpointID: UUID
+    @State private var name: String
+    @State private var format: TranslationAPIFormat
+    @State private var address: String
+    @State private var model: String
+    @State private var savedKey: String?
+    @State private var clearedSavedKey = false
+    @State private var newKey = ""
+    @State private var saveError: String?
+    @State private var test: Test?
 
-    private var isAddressValid: Bool { OpenAICompatibleEngine.baseURL(address) != nil }
+    init(mode: Mode) {
+        self.mode = mode
+        switch mode {
+        case .new:
+            _endpointID = State(initialValue: UUID())
+            _name = State(initialValue: "")
+            _format = State(initialValue: .openAI)
+            _address = State(initialValue: TranslationAPIFormat.openAI.defaultBaseURL)
+            _model = State(initialValue: "")
+            _savedKey = State(initialValue: nil)
+        case .existing(let endpoint):
+            _endpointID = State(initialValue: endpoint.id)
+            _name = State(initialValue: endpoint.name)
+            _format = State(initialValue: endpoint.format)
+            _address = State(initialValue: endpoint.baseURL)
+            _model = State(initialValue: endpoint.model)
+            _savedKey = State(initialValue: TranslationService.shared.key(for: endpoint.id))
+        }
+    }
+
+    private var isEditingExisting: Bool { if case .existing = mode { true } else { false } }
+
+    private var effectiveKey: String? {
+        let typed = newKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !typed.isEmpty { return typed }
+        return clearedSavedKey ? nil : savedKey
+    }
+
+    private var draftEndpoint: TranslationEndpoint {
+        TranslationEndpoint(id: endpointID, name: name, format: format, baseURL: address,
+                            model: format.usesModel ? model : "")
+    }
+
+    private var canSave: Bool { format.isConfigured(endpoint: draftEndpoint, key: effectiveKey) }
+    private var canFetchModels: Bool { format.usesModel && format.previewURL(address: address) != nil }
+    private var isTesting: Bool { if case .running = test { true } else { false } }
 
     var body: some View {
         SettingsList {
+            Section {
+                TextField("名称（可选，如 DeepSeek、本机 Ollama）", text: $name)
+                Picker("接口格式", selection: $format) {
+                    ForEach(TranslationAPIFormat.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                Menu("填入常用预设") {
+                    ForEach(Self.presets, id: \.name) { preset in
+                        Button("\(preset.name)（\(preset.format.title)）") { apply(preset) }
+                    }
+                }
+            } header: { Text("端点") } footer: {
+                Text("许多第三方中转站和本地推理服务（Ollama、LM Studio、vLLM、OneAPI）使用 OpenAI 兼容、Claude 或 Gemini 接口格式，按服务商文档选择即可。")
+            }
             Section {
                 TextField("https://…", text: $address)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                Menu("填入常用服务") {
-                    ForEach(Self.services, id: \.address) { service in
-                        Button(service.name) { address = service.address }
-                    }
-                }
             } header: { Text("服务地址") } footer: {
-                if isAddressValid {
-                    // A plain string, so the example address isn't turned into a link.
-                    Text(String(localized: "填到 /v1 这一级。局域网里的 Ollama 填 http://电脑的 IP 地址:11434/v1。"))
+                if let preview = format.previewURL(address: address, model: model, key: effectiveKey) {
+                    Text(verbatim: "请求地址：\(preview.absoluteString)")
                 } else {
                     Text("地址要以 https:// 或 http:// 开头。")
                 }
             }
             Section {
-                if let savedKey {
+                if let savedKey, !clearedSavedKey {
                     LabeledContent("已保存", value: "••••\(savedKey.suffix(4))")
                         .accessibilityIdentifier("saved-key")
                 }
-                SecureField(savedKey == nil ? "粘贴 API Key" : "换一个 Key", text: $newKey)
+                SecureField(savedKey != nil && !clearedSavedKey ? "输入新 Key 以替换（不改可留空）" : "API Key（本地无鉴权服务可留空）", text: $newKey)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .onSubmit(saveKey)
-                Button("保存 Key", action: saveKey)
-                    .disabled(newKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                if savedKey != nil {
-                    Button("删除 Key", role: .destructive, action: deleteKey)
+                if savedKey != nil && !clearedSavedKey {
+                    Button("清除已保存的 Key", role: .destructive) {
+                        clearedSavedKey = true
+                        test = nil
+                    }
                 }
             } header: { Text("API Key") } footer: {
-                if let keyError {
-                    Text(keyError).foregroundStyle(.red)
+                if let saveError {
+                    Text(saveError).foregroundStyle(.red)
+                } else if format == .deepL {
+                    Text("Key 只存在本机钥匙串里，不同步也不进备份。官方免费版（以 :fx 结尾）和付费版 Key 会自动选用对应的官方地址；自建 DeepLX 可填自己的地址。")
                 } else {
-                    Text("Key 只存在这台设备的钥匙串里，不随 iCloud 同步，也不进备份。建议为 Readling 单独创建一个 Key，并在服务商后台设置额度上限。不需要 Key 的服务（如本机的 Ollama）可以留空。")
+                    Text("Key 只存在本机钥匙串里，不随 iCloud 同步，也不进备份。建议单独创建一个设置了额度上限的 Key；局域网里的无鉴权服务可留空。")
                 }
             }
-            Section {
-                TextField("模型名", text: $model)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                NavigationLink("从服务获取模型列表") { TranslationModelList(address: address, selection: $model) }
-                    .disabled(!isAddressValid)
-            } header: { Text("模型") } footer: {
-                Text("获取列表后从中选择，也可以直接填写服务商文档里的模型名。")
+            if format.usesModel {
+                Section {
+                    TextField("模型名", text: $model)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    NavigationLink("从服务获取模型列表") {
+                        TranslationModelList(format: format, address: address, key: effectiveKey, selection: $model)
+                    }
+                    .disabled(!canFetchModels)
+                } header: { Text("模型") } footer: {
+                    Text("从端点拉取可用模型列表，或直接填写模型 ID。")
+                }
             }
             Section {
                 Button("测试", action: runTest)
-                    .disabled(OpenAICompatibleEngine.saved() == nil || isTesting)
+                    .disabled(!canSave || isTesting)
                 switch test {
                 case nil: EmptyView()
                 case .running: ProgressView()
@@ -406,55 +502,73 @@ struct OpenAIEngineSettingsView: View {
                 case .failed(let message): Text(message).foregroundStyle(.red)
                 }
             } footer: {
-                Text("翻译一句短的英文，确认地址、Key 和模型可用。")
+                Text("发送一句短英文，验证当前填写的地址、接口格式和认证信息可用。")
+            }
+            if isEditingExisting {
+                Section {
+                    Button("删除端点", role: .destructive) {
+                        TranslationService.shared.removeEndpoint(endpointID)
+                        dismiss()
+                    }
+                }
             }
         }
-        .navigationTitle(TranslationEngineID.openAI.title)
+        .navigationTitle(isEditingExisting ? "编辑端点" : "添加端点")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { savedKey = TranslationKeychain.shared.key(for: .openAI) }
-        .onChange(of: address) { changed() }
-        .onChange(of: model) { changed() }
-    }
-
-    private var isTesting: Bool { if case .running = test { true } else { false } }
-
-    private func changed() {
-        test = nil
-        TranslationService.shared.clearCache()
-    }
-
-    private func saveKey() {
-        let key = newKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return }
-        do {
-            try TranslationKeychain.shared.setKey(key, for: .openAI)
-            savedKey = key
-            newKey = ""
-            keyError = nil
-            changed()
-        } catch {
-            keyError = error.localizedDescription
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("取消") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("保存", action: save).disabled(!canSave)
+            }
         }
+        .onChange(of: format) { oldFormat, newFormat in
+            let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed == oldFormat.defaultBaseURL {
+                address = newFormat.defaultBaseURL
+            }
+            test = nil
+        }
+        .onChange(of: address) { test = nil }
+        .onChange(of: model) { test = nil }
+        .onChange(of: newKey) { test = nil }
     }
 
-    private func deleteKey() {
+    private func apply(_ preset: Preset) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedName.isEmpty || Self.presets.contains(where: { $0.name == trimmedName }) {
+            name = preset.name
+        }
+        format = preset.format
+        address = preset.address
+        test = nil
+    }
+
+    private func save() {
+        let typed = newKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let keyChange: TranslationService.KeyChange = if !typed.isEmpty {
+            .set(typed)
+        } else if clearedSavedKey {
+            .clear
+        } else {
+            .unchanged
+        }
         do {
-            try TranslationKeychain.shared.deleteKey(for: .openAI)
-            savedKey = nil
-            keyError = nil
-            changed()
+            try TranslationService.shared.saveEndpoint(draftEndpoint, keyChange: keyChange)
+            dismiss()
         } catch {
-            keyError = error.localizedDescription
+            saveError = error.localizedDescription
         }
     }
 
     private func runTest() {
         test = .running
-        let engine = OpenAICompatibleEngine(configuration: OpenAICompatibleEngine.saved())
+        let instance = format.engine(for: draftEndpoint, key: effectiveKey)
         Task {
             var latest = ""
             do {
-                for try await text in engine.run(.translate("The quick brown fox jumps over the lazy dog.")) { latest = text }
+                for try await text in instance.run(.translate("The quick brown fox jumps over the lazy dog.")) { latest = text }
                 test = latest.isEmpty ? .failed(String(localized: "没有得到译文。")) : .passed(latest)
             } catch {
                 test = .failed(error.localizedDescription)
@@ -463,9 +577,11 @@ struct OpenAIEngineSettingsView: View {
     }
 }
 
-/// The models a service lists, searchable; picking one fills in the model name.
+/// The models an endpoint lists, searchable; picking one fills in the model name.
 private struct TranslationModelList: View {
+    var format: TranslationAPIFormat
     var address: String
+    var key: String?
     @Binding var selection: String
     @Environment(\.dismiss) private var dismiss
     @State private var models: [String]?
@@ -495,11 +611,10 @@ private struct TranslationModelList: View {
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query)
         .task {
-            guard let baseURL = OpenAICompatibleEngine.baseURL(address) else { return }
-            let configuration = OpenAICompatibleEngine.Configuration(baseURL: baseURL, key: TranslationKeychain.shared.key(for: .openAI), model: "")
             do {
-                models = try await OpenAICompatibleEngine.models(configuration)
-                if models?.isEmpty == true { error = String(localized: "服务没有列出模型，请直接填写模型名。") }
+                let fetched = try await format.models(address: address, key: key)
+                models = fetched
+                if fetched.isEmpty { error = String(localized: "服务没有列出模型，请直接填写模型名。") }
             } catch {
                 self.error = error.localizedDescription
             }

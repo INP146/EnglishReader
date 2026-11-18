@@ -1,7 +1,7 @@
 import Foundation
 
-/// Any service speaking OpenAI's Chat Completions API: OpenAI itself, DeepSeek,
-/// Qwen, Kimi, OpenRouter, a local Ollama… The user brings the address, key and model.
+/// Any endpoint speaking OpenAI's Chat Completions API: OpenAI, DeepSeek, Qwen,
+/// Kimi, OpenRouter, OneAPI relays, or a local Ollama / LM Studio / vLLM server.
 struct OpenAICompatibleEngine: TranslationEngine {
     struct Configuration: Equatable, Sendable {
         var baseURL: URL
@@ -10,29 +10,29 @@ struct OpenAICompatibleEngine: TranslationEngine {
         var model: String
     }
 
-    static let baseURLKey = "translationOpenAIBaseURL"
-    static let modelKey = "translationOpenAIModel"
     static let defaultBaseURL = "https://api.openai.com/v1"
 
-    let id = TranslationEngineID.openAI
+    var title = TranslationAPIFormat.openAI.title
     let capabilities: Set<TranslationCapability> = [.translate, .explain]
-    /// Nil until the user has set an address and a model.
     var configuration: Configuration?
     var session: URLSession = .shared
 
-    /// The settings the user saved, or nil when the engine isn't usable yet.
-    static func saved(defaults: UserDefaults = .standard, keychain: TranslationKeychain = .shared) -> Configuration? {
-        let address = defaults.string(forKey: baseURLKey) ?? defaultBaseURL
-        let model = (defaults.string(forKey: modelKey) ?? "").trimmingCharacters(in: .whitespaces)
-        guard let baseURL = baseURL(address), !model.isEmpty else { return nil }
-        return Configuration(baseURL: baseURL, key: keychain.key(for: .openAI), model: model)
+    static func configuration(endpoint: TranslationEndpoint, key: String?) -> Configuration? {
+        let model = endpoint.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let baseURL = baseURL(endpoint.baseURL), !model.isEmpty else { return nil }
+        let trimmedKey = key?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Configuration(baseURL: baseURL, key: trimmedKey?.isEmpty == true ? nil : trimmedKey, model: model)
     }
 
-    /// An http(s) address with a host, as typed; nil otherwise.
+    /// Normalizes the endpoint root; bare `http(s)://host` gets `/v1`, explicit paths stay as typed.
     static func baseURL(_ address: String) -> URL? {
-        guard let url = URL(string: address.trimmingCharacters(in: .whitespaces)),
-              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http", url.host() != nil else { return nil }
-        return url
+        guard let url = OnlineTranslation.cleanBaseURL(address, strippingSuffixes: ["/chat/completions"]) else { return nil }
+        let path = url.path()
+        return path.isEmpty || path == "/" ? url.appending(path: "v1") : url
+    }
+
+    static func endpointURL(_ address: String) -> URL? {
+        baseURL(address)?.appending(path: "chat/completions")
     }
 
     private static func urlRequest(_ path: String, _ configuration: Configuration) -> URLRequest {
@@ -75,44 +75,24 @@ struct OpenAICompatibleEngine: TranslationEngine {
 
     func run(_ request: TranslationRequest) -> AsyncThrowingStream<String, Error> {
         let configuration = configuration
-        let session = session
-        return AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    guard let configuration else { throw TranslationFailure.notConfigured }
-                    let bytes = try await OnlineTranslation.send(Self.chatRequest(request, configuration), session: session)
-                    var events = ServerSentEvents()
-                    var text = ""
-                    func handle(_ event: ServerSentEvents.Event) throws -> Bool {
-                        if event.data == "[DONE]" { return true }
-                        if let delta = try Self.delta(in: event.data), !delta.isEmpty {
-                            text += delta
-                            continuation.yield(text)
-                        }
-                        return false
-                    }
-                    reading: for try await byte in bytes {
-                        if let event = events.feed(byte), try handle(event) { break reading }
-                    }
-                    if let event = events.finish() { _ = try handle(event) }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: Task.isCancelled ? CancellationError() : OnlineTranslation.failure(error))
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
+        return OnlineTranslation.stream({
+            guard let configuration else { throw TranslationFailure.notConfigured }
+            return try Self.chatRequest(request, configuration)
+        }, session: session) { event in
+            if event.data == "[DONE]" { return .done }
+            guard let delta = try Self.delta(in: event.data) else { return .ignore }
+            return .text(delta)
         }
     }
 
-    /// The model ids the service offers, for the settings page to pick from.
+    /// The model ids the endpoint offers, for the endpoint editor to pick from.
     static func models(_ configuration: Configuration, session: URLSession = .shared) async throws -> [String] {
         struct List: Decodable {
             struct Model: Decodable { var id: String }
             var data: [Model]
         }
         do {
-            var bytes = Data()
-            for try await byte in try await OnlineTranslation.send(urlRequest("models", configuration), session: session) { bytes.append(byte) }
+            let bytes = try await OnlineTranslation.receive(urlRequest("models", configuration), session: session)
             guard let list = try? JSONDecoder().decode(List.self, from: bytes) else {
                 throw TranslationFailure.failed(String(localized: "看不懂服务返回的模型列表。"))
             }
