@@ -12,7 +12,7 @@ iOS 英文阅读器（SwiftUI，iOS 26，Xcode 26.3+）。离线 EPUB/TXT 导入
   - `ReaderView.swift` 阅读页与底部工具栏；`ReadingSurface.swift` 上下滚动正文；`PagedSurface.swift` 分页正文（仿真/覆盖/平移/无动画；每页从上一页结束处起在页面大小的容器里单独排版，装下的就是这一页，显示的也正是这次排版）
   - `ReaderPanels.swift` 设置面板、字体/间距/更多设置、书内搜索；`ReaderStyle.swift` 排版、配色主题、背景纹理
   - `WordsView.swift` 生词本与复习
-  - `SettingsView.swift` 设置标签页（原生 Form 风格）：阅读器设置（与阅读页内设置共用同一批 `@AppStorage` 键）、关于
+  - `SettingsView.swift` 设置标签页（原生分组列表布局，配色与书架、生词本一致，见 `SettingsList`）：阅读器设置（与阅读页内设置共用同一批 `@AppStorage` 键）、关于
   - `WordDictionary.swift` 词典：`DictionaryPack` 读取单个词典包（SQLite，schema 2），`WordDictionary` 以并集方式查询核心包（内置的 `Resources/dictionary-core.sqlite`，或已下载的更新版本，取较新者）与 Application Support/Readling/Dictionaries 下的已下载包。变形→原形只由核心包的 `form` 表决定，生词的 key 与安装了哪些包无关
   - `DictionaryDownloads.swift` 词典包下载：读取清单 `Dictionaries/manifest.json`（经 raw.githubusercontent），从本仓库 Releases 下载 zip，校验 sha256 后安装到 Application Support/Readling/Dictionaries。核心词典也在清单里，更新时核心与已下载的包整版一起更新，一批全部下载解压成功才替换；“设置 › 词典”页在 `SettingsView.swift`
   - `Theme.swift` 颜色（自动适配深色）

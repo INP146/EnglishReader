@@ -1,12 +1,12 @@
 import PhotosUI
 import SwiftUI
 
-/// The app's own Settings tab, laid out like the system Settings app rather
-/// than in the reader's style.
+/// The app's own Settings tab, laid out like the system Settings app but in
+/// the app's paper and card colors.
 struct SettingsView: View {
     var body: some View {
         NavigationStack {
-            List {
+            SettingsList {
                 Section {
                     NavigationLink { ReaderPreferencesView() } label: {
                         SettingsIconLabel("阅读器设置", systemImage: "book.pages.fill", color: .orange)
@@ -78,7 +78,7 @@ struct ReaderPreferencesView: View {
     private var hasCustomImage: Bool { _ = backdropVersion; return ReaderBackdrop.customImage != nil }
 
     var body: some View {
-        Form {
+        SettingsList {
             Section {
                 preview
             }
@@ -176,18 +176,20 @@ struct ReaderPreferencesView: View {
 
     private func themePicker(_ title: LocalizedStringKey, selection: Binding<String>, dark: Bool) -> some View {
         NavigationLink {
-            List(ReaderTheme.all.filter { $0.isDark == dark }) { theme in
-                Button { selection.wrappedValue = theme.id } label: {
-                    HStack(spacing: 12) {
-                        ReaderThemeSwatch(theme: theme)
-                        Text(theme.title).foregroundStyle(.primary)
-                        Spacer()
-                        if theme.id == ReaderTheme.named(selection.wrappedValue, dark: dark).id {
-                            Image(systemName: "checkmark").foregroundStyle(Color.accent)
+            SettingsList {
+                ForEach(ReaderTheme.all.filter { $0.isDark == dark }) { theme in
+                    Button { selection.wrappedValue = theme.id } label: {
+                        HStack(spacing: 12) {
+                            ReaderThemeSwatch(theme: theme)
+                            Text(theme.title).foregroundStyle(.primary)
+                            Spacer()
+                            if theme.id == ReaderTheme.named(selection.wrappedValue, dark: dark).id {
+                                Image(systemName: "checkmark").foregroundStyle(Color.accent)
+                            }
                         }
                     }
+                    .accessibilityAddTraits(theme.id == selection.wrappedValue ? .isSelected : [])
                 }
-                .accessibilityAddTraits(theme.id == selection.wrappedValue ? .isSelected : [])
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
@@ -225,7 +227,7 @@ struct DictionarySettingsView: View {
     private let downloads = DictionaryDownloads.shared
 
     var body: some View {
-        Form {
+        SettingsList {
             let updates = downloads.updates
             if !updates.isEmpty, let release = downloads.catalog?.release {
                 Section {
@@ -373,7 +375,7 @@ struct AboutView: View {
     }
 
     var body: some View {
-        List {
+        SettingsList {
             Section {
                 VStack(spacing: 6) {
                     Image(systemName: "book.pages")
@@ -406,6 +408,18 @@ struct AboutView: View {
 }
 
 // MARK: Shared pieces
+
+/// A grouped settings list on the app's paper background with card rows, as in
+/// the library and word list, instead of the system grays.
+struct SettingsList<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        List { content.listRowBackground(Color.card) }
+            .scrollContentBackground(.hidden)
+            .background(Color.paper)
+    }
+}
 
 /// A titled slider with its value on the trailing side, for settings forms.
 struct ReaderSettingSlider: View {
