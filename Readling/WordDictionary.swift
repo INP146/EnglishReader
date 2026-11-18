@@ -51,6 +51,8 @@ struct DictionaryEntry: Equatable, Sendable {
 @MainActor
 final class DictionaryPack {
     nonisolated static let schema = 2
+    /// The pack every install has: bundled with the app, and replaced by a newer download.
+    nonisolated static let coreID = "core"
 
     let url: URL
     let id: String
@@ -149,10 +151,10 @@ final class DictionaryPack {
     }
 }
 
-/// Offline English–Chinese lookups across the installed packs: the bundled core
-/// (Resources/dictionary-core.sqlite, from ECDICT, MIT licensed; see SOURCE.md) plus any
-/// downloaded packs. Inflections resolve through the core's form table alone, so the
-/// headword a word is saved under doesn't depend on which packs are installed.
+/// Offline English–Chinese lookups across the installed packs: the core (bundled as
+/// Resources/dictionary-core.sqlite, from ECDICT, MIT licensed; see SOURCE.md, or a newer
+/// downloaded one) plus any downloaded packs. Inflections resolve through the core's form
+/// table alone, so the headword a word is saved under doesn't depend on which packs are installed.
 /// Primary-key reads take microseconds, so lookups run synchronously.
 @MainActor
 final class WordDictionary {
@@ -161,7 +163,9 @@ final class WordDictionary {
     /// Where downloaded packs live.
     static let packsDirectory = URL.appData.appendingPathComponent("Dictionaries", isDirectory: true)
 
-    private let core: DictionaryPack?
+    private let bundledCore: DictionaryPack?
+    /// The core in use: the bundled one, or a downloaded one from a newer release.
+    private(set) var core: DictionaryPack?
     /// Where this dictionary looks for downloaded packs.
     let directory: URL?
     /// Core first, then downloaded packs in their catalog order.
@@ -169,7 +173,7 @@ final class WordDictionary {
 
     init(core url: URL? = Bundle.main.url(forResource: "dictionary-core", withExtension: "sqlite"),
          directory: URL? = WordDictionary.packsDirectory) {
-        core = url.flatMap(DictionaryPack.init(url:))
+        bundledCore = url.flatMap(DictionaryPack.init(url:))
         self.directory = directory
         reload()
     }
@@ -178,11 +182,22 @@ final class WordDictionary {
 
     /// Re-reads the downloaded packs, e.g. after one is installed or removed.
     func reload() {
-        for pack in packs where pack !== core { pack.close() }
+        for pack in packs where pack !== bundledCore { pack.close() }
         let files = directory.flatMap { try? FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil) } ?? []
-        let downloaded = files.filter { $0.pathExtension == "sqlite" }.compactMap(DictionaryPack.init(url:))
-            .filter { $0.id != core?.id }
+        var downloaded = files.filter { $0.pathExtension == "sqlite" }.compactMap(DictionaryPack.init(url:))
             .sorted { ($0.order, $0.id) < ($1.order, $1.id) }
+        core = bundledCore
+        for pack in downloaded where pack.id == DictionaryPack.coreID {
+            if let current = core, !DictionaryCatalog.isNewer(pack.version, than: current.version) {
+                // An app update brought the same or a newer core.
+                pack.close()
+                try? FileManager.default.removeItem(at: pack.url)
+            } else {
+                if core !== bundledCore { core?.close() }
+                core = pack
+            }
+        }
+        downloaded.removeAll { $0.id == DictionaryPack.coreID }
         packs = (core.map { [$0] } ?? []) + downloaded
     }
 

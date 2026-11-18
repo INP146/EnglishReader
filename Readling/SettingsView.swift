@@ -226,9 +226,34 @@ struct DictionarySettingsView: View {
 
     var body: some View {
         Form {
+            let updates = downloads.updates
+            if !updates.isEmpty, let release = downloads.catalog?.release {
+                Section {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("词典 \(release) 可更新")
+                            Text(ByteCountFormatter.string(fromByteCount: updates.reduce(0) { $0 + $1.size }, countStyle: .file))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if downloads.isUpdating {
+                            ProgressView()
+                        } else {
+                            Button("更新") { Task { await downloads.updateAll() } }
+                                .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.small)
+                        }
+                    }
+                } footer: {
+                    Text("核心词典和已下载的词典包一起更新，下载新词典包时也会顺带更新，以免各包收录的词条对不上。")
+                }
+            }
             Section {
-                if let core = downloads.dictionary.packs.first {
-                    packLabel(core.title, entries: core.entryCount, detail: String(localized: "内置"))
+                if let core = downloads.dictionary.core {
+                    if let pack = downloads.packs.first(where: { $0.id == core.id }) {
+                        row(pack)
+                    } else {
+                        packLabel(core.title, details: [Self.count(core.entryCount), core.version])
+                    }
                 }
             } header: { Text("已内置") } footer: {
                 Text("常用词、它们的变形和通用短语（含短语动词），不联网也能用。")
@@ -278,11 +303,17 @@ struct DictionarySettingsView: View {
 
     private func row(_ pack: DictionaryCatalog.Pack) -> some View {
         let status = downloads.status(of: pack)
-        let installed = status == .installed || status == .updateAvailable
+        let installed = downloads.installed(pack.id)
+        let isCore = pack.id == DictionaryPack.coreID
+        // The installed version's figures until it is updated.
+        var details = [Self.count(installed?.entryCount ?? pack.entries)]
+        if !isCore {
+            details.append(ByteCountFormatter.string(fromByteCount: installed == nil ? pack.size : pack.installedSize, countStyle: .file))
+        }
+        details.append(installed?.version ?? pack.version)
         return HStack {
             VStack(alignment: .leading, spacing: 2) {
-                packLabel(pack.title, entries: pack.entries,
-                          detail: ByteCountFormatter.string(fromByteCount: installed ? pack.installedSize : pack.size, countStyle: .file))
+                packLabel(pack.title, details: details)
                 if case .failed(let message) = status {
                     Text(message).font(.caption).foregroundStyle(.red)
                 }
@@ -293,8 +324,7 @@ struct DictionarySettingsView: View {
                 Button(status == .notInstalled ? "下载" : "重试") { Task { await downloads.download(pack) } }
                     .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.small)
             case .updateAvailable:
-                Button("更新") { Task { await downloads.download(pack) } }
-                    .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.small)
+                Text("可更新").foregroundStyle(.secondary)
             case .downloading(let fraction):
                 Text("\(Int(fraction * 100))%").monospacedDigit().foregroundStyle(.secondary)
                 Button { downloads.cancel(pack) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
@@ -303,25 +333,25 @@ struct DictionarySettingsView: View {
             case .installing:
                 ProgressView()
             case .installed:
-                Text("已安装").foregroundStyle(.secondary)
+                if !isCore { Text("已安装").foregroundStyle(.secondary) }
             }
         }
         .swipeActions {
-            if installed {
+            if installed != nil && !isCore {
                 Button("删除", role: .destructive) { downloads.remove(pack) }
             }
         }
         .contextMenu {
-            if installed {
+            if installed != nil && !isCore {
                 Button("删除", systemImage: "trash", role: .destructive) { downloads.remove(pack) }
             }
         }
     }
 
-    private func packLabel(_ title: String, entries: Int, detail: String) -> some View {
+    private func packLabel(_ title: String, details: [String]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
-            Text(verbatim: "\(Self.count(entries)) · \(detail)").font(.caption).foregroundStyle(.secondary)
+            Text(verbatim: details.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
         }
     }
 

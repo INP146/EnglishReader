@@ -134,12 +134,11 @@ def build_packs(csv_path: Path, out: Path, version: str, commit: str) -> dict[st
 
 
 def package(out: Path, version: str) -> dict:
-    """Zips every pack but core, then writes manifest.json and SHA256SUMS next to them."""
+    """Zips every pack, the core included (apps update their bundled core from it), then writes
+    manifest.json and SHA256SUMS next to them."""
     packs = []
     for path in sorted(out.glob("dictionary-*.sqlite")):
         meta = pack_meta(path)
-        if meta["id"] == "core":
-            continue
         archive = out / f"dictionary-{meta['id']}.zip"
         info = zipfile.ZipInfo(path.name, date_time=ZIP_TIME)
         info.compress_type = zipfile.ZIP_DEFLATED
@@ -204,7 +203,7 @@ def check(root: Path, version: str | None = None, *, require_notes: bool = False
             errors.append(f"{MANIFEST} 指向 {adopted}，比 {RELEASE} 的 {current} 还新")
         for pack in manifest.get("packs", []):
             name = f"dictionary-{pack.get('id')}.zip"
-            if pack.get("id") not in builder.PACKS or pack.get("id") == "core" or pack.get("schema") != builder.SCHEMA \
+            if pack.get("id") not in builder.PACKS or pack.get("schema") != builder.SCHEMA \
                     or pack.get("version") != adopted or pack.get("url") != release_url(adopted, name) \
                     or HEX64.fullmatch(pack.get("sha256", "")) is None:
                 errors.append(f"{MANIFEST} 中的 {pack.get('id')} 与 {tag(adopted)} 不符")
@@ -236,7 +235,7 @@ def draft_notes(version: str, previous: str | None, counts: dict[str, int], sour
         return f"{delta:+,}" if delta else "0"
 
     rows = "\n".join(
-        f"| {title}{'（内置于 app）' if pack == 'core' else ''} | {group} | {counts[pack]:,} | {change(pack)} |"
+        f"| {title}{'（内置于 app，也可下载更新）' if pack == 'core' else ''} | {group} | {counts[pack]:,} | {change(pack)} |"
         for pack, (title, group, _) in sorted(builder.PACKS.items(), key=lambda item: item[1][2]))
     review = ""
     if ai_review:
@@ -260,10 +259,10 @@ def draft_notes(version: str, previous: str | None, counts: dict[str, int], sour
 ## 上线
 
 推送 tag 后，Actions 从上面固定的数据源重新构建全部词典包，核对其中的核心词典与 app 内置的一致，
-再创建 Release，附上各词典包、manifest.json 和 SHA256SUMS。Release 不会成为仓库的 Latest Release。
+再创建 Release，附上各词典包（含核心词典）、manifest.json 和 SHA256SUMS。Release 不会成为仓库的 Latest Release。
 
 发布成功后运行 `python3 Tools/dictionary_release.py adopt {version}`，提交并推送
-`Dictionaries/manifest.json`，app 的“设置 › 词典”才会列出这批词典包。
+`Dictionaries/manifest.json`，app 的“设置 › 词典”才会提示更新到这一版。
 """
 
 

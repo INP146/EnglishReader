@@ -50,16 +50,10 @@ enum DictionaryInstaller {
         }
     }
 
-    /// Verifies `archive` against the catalog, unpacks it and installs the pack as
-    /// `directory/<id>.sqlite`, replacing an older version. Returns the installed file.
-    @discardableResult
-    nonisolated static func install(archive: URL, as pack: DictionaryCatalog.Pack, into directory: URL) throws -> URL {
+    /// Verifies `archive` against the catalog and unpacks the pack inside it into `staging`. Returns the unpacked file.
+    nonisolated static func unpack(_ archive: URL, as pack: DictionaryCatalog.Pack, into staging: URL) throws -> URL {
         guard try sha256(of: archive) == pack.sha256.lowercased() else { throw Failure.checksum }
-        let fileManager = FileManager.default
-        let staging = fileManager.temporaryDirectory.appendingPathComponent("dictionary-\(UUID().uuidString)", isDirectory: true)
-        try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
-        defer { try? fileManager.removeItem(at: staging) }
-
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         let unpacked = staging.appendingPathComponent("\(pack.id).sqlite")
         do {
             let zip = try Archive(url: archive, accessMode: .read)
@@ -72,19 +66,25 @@ enum DictionaryInstaller {
         }
         let meta = DictionaryPack.meta(at: unpacked)
         guard meta?["id"] == pack.id, meta?["schema"] == String(pack.schema) else { throw Failure.pack }
+        return unpacked
+    }
 
+    /// Moves unpacked packs into `directory` as `<id>.sqlite`, replacing older versions.
+    nonisolated static func place(_ files: [URL], into directory: URL) throws {
+        let fileManager = FileManager.default
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        var installed = directory.appendingPathComponent("\(pack.id).sqlite")
-        if fileManager.fileExists(atPath: installed.path) {
-            _ = try fileManager.replaceItemAt(installed, withItemAt: unpacked)
-        } else {
-            try fileManager.moveItem(at: unpacked, to: installed)
+        for file in files {
+            var installed = directory.appendingPathComponent(file.lastPathComponent)
+            if fileManager.fileExists(atPath: installed.path) {
+                _ = try fileManager.replaceItemAt(installed, withItemAt: file)
+            } else {
+                try fileManager.moveItem(at: file, to: installed)
+            }
+            // It can always be downloaded again.
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try installed.setResourceValues(values)
         }
-        // It can always be downloaded again.
-        var values = URLResourceValues()
-        values.isExcludedFromBackup = true
-        try installed.setResourceValues(values)
-        return installed
     }
 
     nonisolated static func sha256(of file: URL) throws -> String {
@@ -115,7 +115,8 @@ final class DictionaryDownloads {
     private(set) var catalogError: String?
     private(set) var isRefreshing = false
     private var active: [String: Status] = [:]
-    private var tasks: [String: URLSessionDownloadTask] = [:]
+    /// The batch each pack being downloaded belongs to.
+    private var running: [String: Task<Void, Error>] = [:]
     private var resumeData: [String: Data] = [:]
     /// Bumped whenever the installed packs change, so views reading `status` refresh.
     private var changes = 0
@@ -143,24 +144,42 @@ final class DictionaryDownloads {
     var hasMoreToDownload: Bool {
         _ = changes
         guard catalog != nil else { return true }
-        return packs.contains { installedVersion(of: $0.id) == nil }
+        return packs.contains { installed($0.id) == nil }
     }
 
     func status(of pack: DictionaryCatalog.Pack) -> Status {
         _ = changes
         if let status = active[pack.id] { return status }
-        guard let version = installedVersion(of: pack.id) else { return .notInstalled }
+        guard let version = installed(pack.id)?.version else { return .notInstalled }
         return DictionaryCatalog.isNewer(pack.version, than: version) ? .updateAvailable : .installed
     }
 
-    private func installedVersion(of id: String) -> String? {
-        downloaded(id)?.version
+    /// Installed packs, the core included, that the catalog has a newer version of.
+    var updates: [DictionaryCatalog.Pack] {
+        _ = changes
+        return packs.filter { pack in installed(pack.id).map { DictionaryCatalog.isNewer(pack.version, than: $0.version) } ?? false }
     }
 
-    /// The installed download for `id`; the bundled core never counts.
+    var isUpdating: Bool { updates.contains { isBusy($0.id) } }
+
+    /// The installed pack for `id`: the core in use, or a download.
+    func installed(_ id: String) -> DictionaryPack? {
+        id == DictionaryPack.coreID ? dictionary.core : downloaded(id)
+    }
+
+    /// The installed download for `id`; the core is never removed.
     private func downloaded(_ id: String) -> DictionaryPack? {
         let directory = dictionary.directory?.standardizedFileURL
-        return dictionary.packs.first { $0.id == id && $0.url.deletingLastPathComponent().standardizedFileURL == directory }
+        return dictionary.packs.first {
+            $0.id == id && $0.id != DictionaryPack.coreID && $0.url.deletingLastPathComponent().standardizedFileURL == directory
+        }
+    }
+
+    private func isBusy(_ id: String) -> Bool {
+        switch active[id] {
+        case .downloading, .installing: true
+        default: false
+        }
     }
 
     func refresh() async {
@@ -182,10 +201,63 @@ final class DictionaryDownloads {
         }
     }
 
-    /// Downloads and installs `pack`, resuming an earlier interrupted download when possible.
+    /// Downloads and installs `pack` together with every pending update. Each entry lives in exactly one
+    /// pack, so the installed packs must come from one release: a word that moved between packs would
+    /// otherwise be missing or listed twice.
     func download(_ pack: DictionaryCatalog.Pack) async {
-        guard tasks[pack.id] == nil, let directory = dictionary.directory else { return }
-        active[pack.id] = .downloading(0)
+        await install(updates + [pack])
+    }
+
+    /// Brings the core and every downloaded pack to the catalog's release.
+    func updateAll() async {
+        await install(updates)
+    }
+
+    /// Downloads and unpacks every pack in `requested` before placing any, so a failure leaves the installed packs as they were.
+    private func install(_ requested: [DictionaryCatalog.Pack]) async {
+        guard let directory = dictionary.directory else { return }
+        var ids = Set<String>()
+        let batch = requested.filter { !isBusy($0.id) && ids.insert($0.id).inserted }
+        guard !batch.isEmpty else { return }
+        for pack in batch { active[pack.id] = .downloading(0) }
+        let task = Task {
+            let staging = FileManager.default.temporaryDirectory.appendingPathComponent("dictionary-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: staging) }
+            var files: [URL] = []
+            for pack in batch {
+                do {
+                    let archive = try await fetch(pack)
+                    defer { try? FileManager.default.removeItem(at: archive) }
+                    active[pack.id] = .installing
+                    files.append(try await Task.detached(priority: .userInitiated) {
+                        try DictionaryInstaller.unpack(archive, as: pack, into: staging)
+                    }.value)
+                } catch {
+                    if !Task.isCancelled { active[pack.id] = .failed(error.localizedDescription) }
+                    throw error
+                }
+            }
+            try Task.checkCancellation()
+            try await Task.detached(priority: .userInitiated) { [files] in
+                try DictionaryInstaller.place(files, into: directory)
+            }.value
+        }
+        for id in ids { running[id] = task }
+        defer { for id in ids { running[id] = nil } }
+        let succeeded = (try? await task.value) != nil
+        if succeeded {
+            dictionary.reload()
+            changes += 1
+        }
+        for id in ids {
+            if case .failed = active[id], !succeeded { continue }
+            active[id] = nil
+            if task.isCancelled { resumeData[id] = nil }
+        }
+    }
+
+    /// Downloads `pack`'s archive, resuming an earlier interrupted download when possible.
+    private func fetch(_ pack: DictionaryCatalog.Pack) async throws -> URL {
         let delegate = DownloadDelegate(expectedSize: pack.size) { [weak self] fraction in
             Task { @MainActor in
                 if case .downloading = self?.active[pack.id] { self?.active[pack.id] = .downloading(fraction) }
@@ -195,32 +267,17 @@ final class DictionaryDownloads {
         defer { session.finishTasksAndInvalidate() }
         let task = resumeData.removeValue(forKey: pack.id).map { session.downloadTask(withResumeData: $0) }
             ?? session.downloadTask(with: pack.url)
-        tasks[pack.id] = task
         do {
-            let archive = try await delegate.run(task)
-            tasks[pack.id] = nil
-            active[pack.id] = .installing
-            defer { try? FileManager.default.removeItem(at: archive) }
-            try await Task.detached(priority: .userInitiated) {
-                try DictionaryInstaller.install(archive: archive, as: pack, into: directory)
-            }.value
-            dictionary.reload()
-            changes += 1
-            active[pack.id] = nil
+            return try await delegate.run(task)
         } catch {
-            tasks[pack.id] = nil
             if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data { resumeData[pack.id] = data }
-            if (error as? URLError)?.code == .cancelled {
-                active[pack.id] = nil
-            } else {
-                active[pack.id] = .failed(error.localizedDescription)
-            }
+            throw error
         }
     }
 
+    /// Cancels the download `pack` is part of, with the rest of its batch.
     func cancel(_ pack: DictionaryCatalog.Pack) {
-        tasks[pack.id]?.cancel()
-        resumeData[pack.id] = nil
+        running[pack.id]?.cancel()
     }
 
     func remove(_ pack: DictionaryCatalog.Pack) {

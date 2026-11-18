@@ -156,8 +156,8 @@ class ReleaseTests(unittest.TestCase):
         first = (self.root / release.BUILD / "SHA256SUMS").read_text()
         manifest = release.build(self.root, verify_core=True)
         self.assertEqual((self.root / release.BUILD / "SHA256SUMS").read_text(), first)
-        self.assertEqual([pack["id"] for pack in manifest["packs"]][0], "extended")
-        self.assertNotIn("core", [pack["id"] for pack in manifest["packs"]])
+        # The core ships too, so apps can update the one they bundle.
+        self.assertEqual([pack["id"] for pack in manifest["packs"]][:2], ["core", "extended"])
         for pack in manifest["packs"]:
             archive = self.root / release.BUILD / f"dictionary-{pack['id']}.zip"
             self.assertEqual(hashlib.sha256(archive.read_bytes()).hexdigest(), pack["sha256"])
@@ -176,7 +176,7 @@ class ReleaseTests(unittest.TestCase):
         manifest = json.loads((self.root / release.BUILD / "manifest.json").read_text())
         (self.root / release.MANIFEST).write_text(json.dumps(manifest))
         release.check(self.root)
-        manifest["packs"][0]["url"] = "https://example.com/dictionary-extended.zip"
+        manifest["packs"][1]["url"] = "https://example.com/dictionary-extended.zip"
         (self.root / release.MANIFEST).write_text(json.dumps(manifest))
         with self.assertRaisesRegex(ValueError, "extended"):
             release.check(self.root)

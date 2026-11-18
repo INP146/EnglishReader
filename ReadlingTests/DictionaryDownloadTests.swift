@@ -9,27 +9,80 @@ struct DictionaryDownloadTests {
     @Test func installerChecksTheArchiveBeforeInstalling() throws {
         let folder = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: folder) }
+        let staging = folder.appendingPathComponent("staging", isDirectory: true)
         let installed = folder.appendingPathComponent("packs", isDirectory: true)
         let (archive, pack) = try makeArchive(in: folder, id: "extended", entries: [("abdicate", "vt. 退位")])
 
         var tampered = pack
         tampered.sha256 = String(repeating: "0", count: 64)
         #expect(throws: DictionaryInstaller.Failure.checksum) {
-            try DictionaryInstaller.install(archive: archive, as: tampered, into: installed)
+            try DictionaryInstaller.unpack(archive, as: tampered, into: staging)
         }
         var renamed = pack
         renamed.id = "names"
         #expect(throws: DictionaryInstaller.Failure.archive) {
-            try DictionaryInstaller.install(archive: archive, as: renamed, into: installed)
+            try DictionaryInstaller.unpack(archive, as: renamed, into: staging)
         }
-        #expect(!FileManager.default.fileExists(atPath: installed.path))
 
-        let file = try DictionaryInstaller.install(archive: archive, as: pack, into: installed)
-        #expect(file.lastPathComponent == "extended.sqlite")
+        let unpacked = try DictionaryInstaller.unpack(archive, as: pack, into: staging)
+        try DictionaryInstaller.place([unpacked], into: installed)
+        let file = installed.appendingPathComponent("extended.sqlite")
         #expect(try file.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
         let dictionary = WordDictionary(core: nil, directory: installed)
         #expect(dictionary.packs.map(\.id) == ["extended"])
         #expect(dictionary.lookup("abdicate")?.definition == "vt. 退位")
+    }
+
+    @Test func theCoreUpdatesTogetherWithTheDownloadedPacks() async throws {
+        let folder = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let installed = folder.appendingPathComponent("packs", isDirectory: true)
+        let bundled = folder.appendingPathComponent("core.sqlite")
+        try makePack(at: bundled, id: "core", order: 0, entries: [("abdicates", "abdicate的第三人称单数")],
+                     forms: [("abdicates", "abdicate")], version: "2026.01.01")
+        let (_, oldExtended) = try makeArchive(in: folder, id: "extended", entries: [("abdicate", "旧")], version: "2026.01.01")
+        let manifest = folder.appendingPathComponent("manifest.json")
+        try JSONEncoder().encode(DictionaryCatalog(format: 1, release: "2026.01.01", packs: [oldExtended])).write(to: manifest)
+        let dictionary = WordDictionary(core: bundled, directory: installed)
+        let downloads = DictionaryDownloads(manifestURL: manifest, cacheURL: folder.appendingPathComponent("catalog.json"),
+                                            dictionary: dictionary)
+        await downloads.refresh()
+        await downloads.download(oldExtended)
+
+        // The next release moves "abdicate" into the core.
+        let (_, core) = try makeArchive(in: folder, id: "core", entries: [("abdicate", "vt. 退位")],
+                                        forms: [("abdicates", "abdicate")], version: "2026.02.01")
+        let (_, extended) = try makeArchive(in: folder, id: "extended", entries: [("abdication", "n. 退位")],
+                                            version: "2026.02.01", name: "new")
+        let (lawArchive, lawPack) = try makeArchive(in: folder, id: "law", entries: [("tort", "n. 侵权行为")], version: "2026.02.01")
+        var law = lawPack
+        try JSONEncoder().encode(DictionaryCatalog(format: 1, release: "2026.02.01", packs: [core, extended, law])).write(to: manifest)
+        await downloads.refresh()
+        #expect(downloads.updates.map(\.id) == ["core", "extended"])
+        #expect(downloads.status(of: core) == .updateAvailable)
+        #expect(downloads.hasMoreToDownload)
+
+        // A batch that fails part-way, after the core and extended have downloaded, installs nothing.
+        law.url = folder.appendingPathComponent("missing.zip")
+        await downloads.download(law)
+        guard case .failed = downloads.status(of: law) else { Issue.record("expected a failure"); return }
+        #expect(downloads.status(of: core) == .updateAvailable && downloads.status(of: extended) == .updateAvailable)
+        #expect(dictionary.core?.version == "2026.01.01" && dictionary.lookup("abdicates")?.definition == "旧")
+
+        // Downloading a new pack brings the installed ones to its release.
+        law.url = lawArchive
+        await downloads.download(law)
+        #expect(downloads.updates.isEmpty && !downloads.hasMoreToDownload)
+        #expect([core, extended, law].allSatisfy { downloads.status(of: $0) == .installed })
+        #expect(dictionary.core?.version == "2026.02.01" && dictionary.packs.map(\.id) == ["core", "extended", "law"])
+        let entry = try #require(dictionary.lookup("abdicates"))
+        #expect(entry.definition == "vt. 退位" && entry.source == "core")
+
+        // An app update bundling the same core makes the download obsolete.
+        let newerBundle = folder.appendingPathComponent("bundled.sqlite")
+        try makePack(at: newerBundle, id: "core", order: 0, entries: [], version: "2026.02.01")
+        #expect(WordDictionary(core: newerBundle, directory: installed).core?.url == newerBundle)
+        #expect(!FileManager.default.fileExists(atPath: installed.appendingPathComponent("core.sqlite").path))
     }
 
     @Test func downloadsInstallUpdateAndRemovePacks() async throws {
@@ -103,12 +156,12 @@ struct DictionaryDownloadTests {
     }
 
     /// A zipped pack as the release would carry it, with its catalog entry.
-    private func makeArchive(in folder: URL, id: String, entries: [(String, String)], version: String = "2026.11.18",
-                             name: String = "") throws -> (URL, DictionaryCatalog.Pack) {
+    private func makeArchive(in folder: URL, id: String, entries: [(String, String)], forms: [(String, String)] = [],
+                             version: String = "2026.11.18", name: String = "") throws -> (URL, DictionaryCatalog.Pack) {
         let work = folder.appendingPathComponent("build-\(id)\(name)", isDirectory: true)
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         let sqlite = work.appendingPathComponent("dictionary-\(id).sqlite")
-        try makePack(at: sqlite, id: id, order: 10, entries: entries, version: version)
+        try makePack(at: sqlite, id: id, order: 10, entries: entries, forms: forms, version: version)
         let archive = work.appendingPathComponent("dictionary-\(id).zip")
         let zip = try Archive(url: archive, accessMode: .create)
         try zip.addEntry(with: sqlite.lastPathComponent, fileURL: sqlite, compressionMethod: .deflate)

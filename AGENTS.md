@@ -13,8 +13,8 @@ iOS 英文阅读器（SwiftUI，iOS 26，Xcode 26.3+）。离线 EPUB/TXT 导入
   - `ReaderPanels.swift` 设置面板、字体/间距/更多设置、书内搜索；`ReaderStyle.swift` 排版、配色主题、背景纹理
   - `WordsView.swift` 生词本与复习
   - `SettingsView.swift` 设置标签页（原生 Form 风格）：阅读器设置（与阅读页内设置共用同一批 `@AppStorage` 键）、关于
-  - `WordDictionary.swift` 词典：`DictionaryPack` 读取单个词典包（SQLite，schema 2），`WordDictionary` 以并集方式查询内置核心包 `Resources/dictionary-core.sqlite` 与 Application Support/Readling/Dictionaries 下的已下载包。变形→原形只由核心包的 `form` 表决定，生词的 key 与安装了哪些包无关
-  - `DictionaryDownloads.swift` 词典包下载：读取清单 `Dictionaries/manifest.json`（经 raw.githubusercontent），从本仓库 Releases 下载 zip，校验 sha256 后安装到 Application Support/Readling/Dictionaries；“设置 › 词典”页在 `SettingsView.swift`
+  - `WordDictionary.swift` 词典：`DictionaryPack` 读取单个词典包（SQLite，schema 2），`WordDictionary` 以并集方式查询核心包（内置的 `Resources/dictionary-core.sqlite`，或已下载的更新版本，取较新者）与 Application Support/Readling/Dictionaries 下的已下载包。变形→原形只由核心包的 `form` 表决定，生词的 key 与安装了哪些包无关
+  - `DictionaryDownloads.swift` 词典包下载：读取清单 `Dictionaries/manifest.json`（经 raw.githubusercontent），从本仓库 Releases 下载 zip，校验 sha256 后安装到 Application Support/Readling/Dictionaries。核心词典也在清单里，更新时核心与已下载的包整版一起更新，一批全部下载解压成功才替换；“设置 › 词典”页在 `SettingsView.swift`
   - `Theme.swift` 颜色（自动适配深色）
 - `ReadlingTests/` 单元测试（`Fixtures/alice.epub` 为真实 Gutenberg EPUB）
 - `ReadlingUITests/` UI 测试：`SelectionUITests.m` 在四种翻页模式下翻页前后长按选词，要求弹出单词卡、点按后关闭；`PagingUITests.m` 在仿真/平移/覆盖模式下连发快速滑动和点按（重叠的手势，跨章节），每轮后要求正常翻页逐页落地。用 XCUIAutomation 的私有事件合成（`XCSynthesizedEventRecord`），因为 XCUIElement 的手势会等应用空闲、无法重叠；该 API 不可用时测试会跳过。应用侧钩子：启动参数 `-freshLibrary` 使用临时空书库；`-dictionaryManifestURL <url>` 改用别的词典清单（可配合本地 `python3 -m http.server` 试下载）；分页正文的 `accessibilityIdentifier` 为 `page 章/总章 页/本章总页`

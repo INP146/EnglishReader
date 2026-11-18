@@ -12,7 +12,9 @@
 
 数据与分包的设计见 `docs/dictionary-design.md`。
 
-**版本**：`2026.11.18`，同一天再发布一次用 `2026.11.18.1`。tag 为 `dict-<版本>`。每个包的 `meta.version` 和清单都记录版本；app 按数字逐段比较，清单里的版本更新时显示“更新”。
+**版本**：`2026.11.18`，同一天再发布一次用 `2026.11.18.1`。tag 为 `dict-<版本>`。每个包的 `meta.version` 和清单都记录版本；app 按数字逐段比较，清单里的版本更新时提示更新，核心词典和已下载的包一起更新。
+
+**核心词典**：`prepare` 把它放进 app（`Readling/Resources/dictionary-core.sqlite`），作为新安装的初始版本；Release 和清单里也有它，所以已安装的 app 不必等下一次发布 app，adopt 之后就能更新核心词典。
 
 **数据源固定**：`Dictionaries/release.json` 记录当前版本，以及 ECDICT 的提交号、`ecdict.csv` 的下载地址和 sha256。构建只用这份固定的数据，下载后先核对 sha256，所以任何时候都能重建出同一批包。
 
@@ -22,7 +24,7 @@
 |---|---|
 | `prepare <版本> [--source-commit <ECDICT 提交>] [--base-tag <tag>]` | 版本必须比当前新。构建全部包，起草发布说明 `docs/releases/dict-<版本>.md`，最后才更新 app 内置的核心词典和 `release.json`，所以起草失败时什么都没变。`--dry-run` 只列出将修改的文件、检查 AI 配置和比较基准，不构建也不调用模型。 |
 | `check [tag] [--require-notes]` | 核对 `release.json`、内置核心词典的 meta、`manifest.json`；`--require-notes` 还要求发布说明已完成（标题与 tag 一致、填写了“主要变更”、不含 `RELEASE_TODO`）。 |
-| `build [--verify-core]` | 按 `release.json` 构建全部包到 `build/dict`，打成 zip，生成 `manifest.json` 和 `SHA256SUMS`。zip 的时间戳和权限固定，同一环境构建两次逐字节一致。`--verify-core` 用表内容哈希比对构建出的核心词典和 app 内置的，不受 SQLite 版本影响。 |
+| `build [--verify-core]` | 按 `release.json` 构建全部包（含核心词典）到 `build/dict`，打成 zip，生成 `manifest.json` 和 `SHA256SUMS`。zip 的时间戳和权限固定，同一环境构建两次逐字节一致。`--verify-core` 用表内容哈希比对构建出的核心词典和 app 内置的，不受 SQLite 版本影响。 |
 | `adopt <版本>` | 下载已发布 Release 的 `manifest.json` 和 `SHA256SUMS`，核对哈希，确认每个包都能下载，再写入 `Dictionaries/manifest.json`。 |
 
 **AI 起草发布说明**（`Tools/release_ai.py`）：在仓库根目录的 `.env`（不提交，模板见 `.env.example`）里配置一次：
