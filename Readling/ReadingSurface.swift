@@ -189,6 +189,14 @@ struct ReadingSurface: UIViewRepresentable {
             didLayout?()
         }
 
+        override func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {
+            ReaderTextTools.tightSelectionRects(super.selectionRects(for: range), in: self)
+        }
+
+        override func caretRect(for position: UITextPosition) -> CGRect {
+            ReaderTextTools.tightRect(super.caretRect(for: position), in: self)
+        }
+
         private func updateWindowInsets() {
             guard let window else { return }
             let insets = UIEdgeInsets(top: window.safeAreaInsets.top, left: 0, bottom: window.safeAreaInsets.bottom, right: 0)
@@ -523,6 +531,85 @@ enum ReaderTextTools {
         let rect = manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: view.textContainer)
         guard rect.insetBy(dx: -3, dy: -2).contains(point) else { return nil }
         return manager.characterIndexForGlyph(at: glyph)
+    }
+
+    /// UIKit highlights whole line fragments, which hold the leading the line spacing adds above the text and the
+    /// paragraph spacing around it. Selections and carets are cut down to the line's type, from its baseline, as
+    /// book readers draw them.
+    static func tightSelectionRects(_ rects: [UITextSelectionRect], in view: UITextView) -> [UITextSelectionRect] {
+        // The lines between a selection's first and last come as one block, so each rect is cut line by line.
+        var lines: [(base: UITextSelectionRect, rect: CGRect, start: Bool, end: Bool)] = []
+        var marks: [(base: UITextSelectionRect, rect: CGRect)] = []
+        for rect in rects {
+            // The empty rects where the handles go sit apart from the highlight and on one line each.
+            if rect.rect.width == 0 {
+                marks.append((rect, tightRect(rect.rect, in: view)))
+                continue
+            }
+            let pieces = typeRects(in: rect.rect, in: view)
+            // One that can't be cut, as round a picture, keeps the system's rect.
+            guard !pieces.isEmpty else { lines.append((rect, rect.rect, rect.containsStart, rect.containsEnd)); continue }
+            for (index, piece) in pieces.enumerated() {
+                lines.append((rect, piece, index == 0 && rect.containsStart, index == pieces.count - 1 && rect.containsEnd))
+            }
+        }
+        // Neighbouring lines meet halfway across the leading between them, so the selection reads as one block,
+        // cut to the type only at its top and bottom.
+        lines.sort { $0.rect.minY < $1.rect.minY }
+        for index in lines.indices.dropFirst() where lines[index].rect.minY > lines[index - 1].rect.maxY {
+            let middle = (lines[index - 1].rect.maxY + lines[index].rect.minY) / 2
+            lines[index - 1].rect.size.height = middle - lines[index - 1].rect.minY
+            lines[index].rect.size.height = lines[index].rect.maxY - middle
+            lines[index].rect.origin.y = middle
+        }
+        // A handle stands as tall as the highlight on its line.
+        let handles = marks.map { mark in
+            var rect = mark.rect
+            if let line = lines.first(where: { $0.rect.minY <= mark.rect.midY && mark.rect.midY <= $0.rect.maxY })?.rect {
+                rect.origin.y = line.minY
+                rect.size.height = line.height
+            }
+            return TightSelectionRect(mark.base, rect: rect, start: mark.base.containsStart, end: mark.base.containsEnd)
+        }
+        return lines.map { TightSelectionRect($0.base, rect: $0.rect, start: $0.start, end: $0.end) } + handles
+    }
+
+    /// A caret or handle rect cut to the type of the line at its middle; it can reach into the next line's leading.
+    static func tightRect(_ rect: CGRect, in view: UITextView) -> CGRect {
+        guard !rect.isNull, !rect.isInfinite else { return rect }
+        let pieces = typeRects(in: CGRect(x: rect.minX, y: rect.midY - 1, width: rect.width, height: 2), in: view)
+        return pieces.count == 1 ? pieces[0] : rect
+    }
+
+    /// The part of a rect on each line it crosses, cut to that line's type; empty when it crosses none that can be cut.
+    private static func typeRects(in rect: CGRect, in view: UITextView) -> [CGRect] {
+        guard view.textLayoutManager == nil, !rect.isNull, !rect.isInfinite, rect.height > 0 else { return [] }
+        let manager = view.layoutManager, container = view.textContainer, storage = view.textStorage
+        guard manager.numberOfGlyphs > 0 else { return [] }
+        let inset = view.textContainerInset
+        // A caret has no width, which would find no glyphs.
+        let local = rect.offsetBy(dx: -inset.left, dy: -inset.top).insetBy(dx: rect.width > 0 ? 0 : -1, dy: 0)
+        let glyphs = manager.glyphRange(forBoundingRect: local, in: container)
+        guard glyphs.length > 0 else { return [] }
+        var pieces: [CGRect] = [], cut = true
+        manager.enumerateLineFragments(forGlyphRange: glyphs) { line, _, _, lineGlyphs, stop in
+            // Only lines the rect mostly covers: the system's rect for a line can reach a few points into the one above.
+            let overlap = min(line.maxY, local.maxY) - max(line.minY, local.minY)
+            guard overlap > min(line.height, local.height) / 2 else { return }
+            let characters = manager.characterRange(forGlyphRange: lineGlyphs, actualGlyphRange: nil)
+            var ascent: CGFloat = 0, descent: CGFloat = 0, picture = false
+            storage.enumerateAttributes(in: characters) { attributes, _, stopAttributes in
+                if attributes[.attachment] != nil { picture = true; stopAttributes.pointee = true; return }
+                guard let font = attributes[.font] as? UIFont else { return }
+                let offset = attributes[.baselineOffset] as? CGFloat ?? 0
+                ascent = max(ascent, font.ascender + offset)
+                descent = max(descent, -font.descender - offset)
+            }
+            guard !picture, ascent + descent > 0 else { cut = false; stop.pointee = true; return }
+            let baseline = line.minY + manager.location(forGlyphAt: lineGlyphs.location).y + inset.top
+            pieces.append(CGRect(x: rect.minX, y: baseline - ascent, width: rect.width, height: ascent + descent))
+        }
+        return cut ? pieces : []
     }
 
     static func wordRange(at location: CGPoint, in view: UITextView, words: [NSRange]) -> NSRange? {
@@ -869,3 +956,24 @@ final class WordFlash {
 
 
 
+
+/// A system selection rect with its height cut to the type; see `ReaderTextTools.tightSelectionRects`.
+final class TightSelectionRect: UITextSelectionRect {
+    private let base: UITextSelectionRect
+    private let tight: CGRect
+    private let start: Bool
+    private let end: Bool
+
+    init(_ base: UITextSelectionRect, rect: CGRect, start: Bool, end: Bool) {
+        self.base = base
+        self.tight = rect
+        self.start = start
+        self.end = end
+    }
+
+    override var rect: CGRect { tight }
+    override var writingDirection: NSWritingDirection { base.writingDirection }
+    override var containsStart: Bool { start }
+    override var containsEnd: Bool { end }
+    override var isVertical: Bool { base.isVertical }
+}

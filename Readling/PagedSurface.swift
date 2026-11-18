@@ -764,4 +764,12 @@ final class PageTextView: UITextView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {
+        ReaderTextTools.tightSelectionRects(super.selectionRects(for: range), in: self)
+    }
+
+    override func caretRect(for position: UITextPosition) -> CGRect {
+        ReaderTextTools.tightRect(super.caretRect(for: position), in: self)
+    }
 }
