@@ -12,7 +12,11 @@ struct SettingsView: View {
                         SettingsIconLabel("阅读器设置", systemImage: "book.pages.fill", color: .orange)
                     }
                     NavigationLink { DictionarySettingsView() } label: {
-                        SettingsIconLabel("词典", systemImage: "character.book.closed.fill", color: .blue)
+                        HStack {
+                            SettingsIconLabel("词典", systemImage: "character.book.closed.fill", color: .blue)
+                            Spacer()
+                            if !DictionaryDownloads.shared.updates.isEmpty { UpdateBadge() }
+                        }
                     }
                 }
                 Section {
@@ -49,6 +53,20 @@ private struct SettingsIconLabel: View {
                 .frame(width: size, height: size)
                 .background(color.gradient, in: RoundedRectangle(cornerRadius: size * 0.23))
         }
+    }
+}
+
+/// The red "1" the system Settings app puts on a row with a pending update.
+private struct UpdateBadge: View {
+    @ScaledMetric(relativeTo: .body) private var size = 22.0
+
+    var body: some View {
+        Text(verbatim: "1")
+            .font(.system(size: size * 0.68, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(.red, in: Circle())
+            .accessibilityLabel("有更新")
     }
 }
 
@@ -284,7 +302,7 @@ struct DictionarySettingsView: View {
             }
             Section {
             } footer: {
-                Text("词典数据来自 ECDICT（MIT 许可），各词典包可以任意组合。只有打开此页或下载词典时才会联网。")
+                Text("词典数据来自 ECDICT（MIT 许可），各词典包可以任意组合。应用每天最多自动检查一次词典更新，此外只有打开此页或下载词典时才会联网。")
             }
         }
         .navigationTitle("词典")
@@ -395,7 +413,7 @@ struct AboutView: View {
             }
             Section {
                 Text("书籍、阅读位置和生词都只保存在这台设备上，不会上传。删除应用会一并删除。")
-                Text("只有在打开“词典”设置或下载词典时才会联网。")
+                Text("应用每天最多自动检查一次词典更新；此外只有在打开“词典”设置或下载词典时才会联网。")
             } header: { Text("数据") }
             Section {
                 Text("释义来自离线英汉词典 ECDICT（MIT 许可）。")

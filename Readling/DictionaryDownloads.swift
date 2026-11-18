@@ -182,6 +182,18 @@ final class DictionaryDownloads {
         }
     }
 
+    /// How long a fetched catalog counts as current when the app checks on its own.
+    static let checkInterval: TimeInterval = 24 * 60 * 60
+
+    /// Refreshes the catalog unless it was fetched within `checkInterval`, so the Settings tab can show an update
+    /// without the reader opening the dictionary page. The cache file is written on every successful fetch, so its
+    /// date is when the catalog was last checked.
+    func refreshIfStale(now: Date = .now) async {
+        let checked = try? cacheURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        if let checked, (0..<Self.checkInterval).contains(now.timeIntervalSince(checked)) { return }
+        await refresh()
+    }
+
     func refresh() async {
         guard !isRefreshing else { return }
         isRefreshing = true

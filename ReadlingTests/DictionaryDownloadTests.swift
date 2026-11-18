@@ -147,6 +147,25 @@ struct DictionaryDownloadTests {
         #expect(downloads.status(of: missing) == .installed)
     }
 
+    @Test func theAutomaticCheckWaitsADayAfterAFetch() async throws {
+        let folder = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (_, pack) = try makeArchive(in: folder, id: "law", entries: [("tort", "n. 侵权行为")])
+        let manifest = folder.appendingPathComponent("manifest.json")
+        try JSONEncoder().encode(DictionaryCatalog(format: 1, release: "2026.01.01", packs: [pack])).write(to: manifest)
+        let downloads = DictionaryDownloads(manifestURL: manifest, cacheURL: folder.appendingPathComponent("catalog.json"),
+                                            dictionary: WordDictionary(core: nil, directory: folder.appendingPathComponent("packs")))
+
+        await downloads.refreshIfStale() // Never fetched: checks right away.
+        #expect(downloads.catalog?.release == "2026.01.01")
+
+        try JSONEncoder().encode(DictionaryCatalog(format: 1, release: "2026.11.18", packs: [pack])).write(to: manifest)
+        await downloads.refreshIfStale()
+        #expect(downloads.catalog?.release == "2026.01.01")
+        await downloads.refreshIfStale(now: .now.addingTimeInterval(DictionaryDownloads.checkInterval + 60))
+        #expect(downloads.catalog?.release == "2026.11.18")
+    }
+
     @Test func releaseVersionsCompareNumerically() {
         #expect(DictionaryCatalog.isNewer("2026.11.18.10", than: "2026.11.18.9"))
         #expect(DictionaryCatalog.isNewer("2026.11.18.1", than: "2026.11.18"))

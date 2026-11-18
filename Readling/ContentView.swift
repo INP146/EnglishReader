@@ -15,6 +15,8 @@ struct ContentView: View {
         ? URL.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "library.json") : nil)
     @State private var tab = 0
     @State private var route: ReaderRoute?
+    @Environment(\.scenePhase) private var scenePhase
+    private let downloads = DictionaryDownloads.shared
 
     var body: some View {
         TabView(selection: $tab) {
@@ -28,8 +30,12 @@ struct ContentView: View {
             Tab("设置", systemImage: "gearshape", value: 2) {
                 SettingsView()
             }
+            .badge(downloads.updates.isEmpty ? 0 : 1)
         }
         .tint(.accent)
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .active { Task { await downloads.refreshIfStale() } }
+        }
         .fullScreenCover(item: $route) { value in
             ReaderView(store: store, bookID: value.bookID, requestedChapter: value.chapter, requestedOffset: value.offset)
         }
