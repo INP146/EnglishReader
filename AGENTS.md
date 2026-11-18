@@ -22,6 +22,7 @@ iOS 英文阅读器（SwiftUI，iOS 26，Xcode 26.3+）。离线 EPUB/TXT 导入
 - `Tools/dictionary_release.py` 词典发布（prepare / check / build / adopt），`Dictionaries/release.json` 记录版本与固定的 ECDICT 数据源，`docs/releases/` 放发布说明；推送 `dict-*` tag 后由 `.github/workflows/publish-dictionaries.yml` 构建并创建 Release。`.env` 的 `RELEASE_AI_PROVIDER=codex|claude` 让 prepare 调用本机 CLI 起草发布说明（`Tools/release_ai.py`，模板见 `.env.example`）。流程见 `docs/release.md`，脚本测试：`python3 -m unittest discover -s Tools/tests`
 - `docs/screenshots/` 模拟器截图
 - `docs/dictionary-design.md` 词典分包、单词卡、下载的设计与实施进度
+- `docs/translation-design.md` 查不到时的翻译、可选翻译引擎（用户自带 Key）的设计与实施进度
 - `docs/release.md` 发布流程（现在是词典包，以后的 app 发布也写在这里）；`docs/releases/` 各 tag 的发布说明
 
 ## 构建与测试

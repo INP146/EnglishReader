@@ -126,7 +126,7 @@ form(form TEXT PRIMARY KEY, lemma TEXT)  -- 仅 core：变形 → 原形
 
 ## 以后
 
-1. 网络词典接口、LLM 语境释义（iOS 26 FoundationModels，本机生成），作为展开区的异步区块。
+1. 网络词典接口、LLM 语境释义，作为展开区的异步区块。查不到时的翻译和可选引擎见 `docs/translation-design.md`。
 2. 用户水平设置：显示难度、筛选生词、在正文里标出超出水平的词。
 3. 自定义词典导入：先 StarDict（格式简单），再 MDict（需要解析库，释义是 HTML，展开区要能显示网页内容）。
 
