@@ -134,9 +134,13 @@ struct SavedPassage: Codable, Identifiable, Equatable, Sendable {
     var createdAt: Date?
     var reviewStage: Int?
     var dueAt: Date?
+    /// Where `definition` came from when the dictionary had no entry, e.g. "机器翻译 · Apple 本机翻译".
+    var definitionSource: String?
 
     var displayWord: String { headword ?? selection }
     var key: String { WordDictionary.normalize(headword ?? selection) }
+    /// A saved sentence or longer expression rather than a word or set phrase.
+    var isExpression: Bool { displayWord.split(whereSeparator: \.isWhitespace).count > 3 }
 
     func isDue(at date: Date) -> Bool { !mastered && (dueAt ?? .distantPast) <= date }
 }

@@ -230,20 +230,24 @@ final class LibraryStore {
         return favorites.first { $0.key == key }
     }
 
-    /// One card per headword: "peeped" and "peep" are the same word to learn.
+    /// One card per headword: "peeped" and "peep" are the same word to learn. Without a
+    /// dictionary entry, `translation` (with where it came from) stands in for the definition.
     @discardableResult
-    func savePassage(bookID: UUID, chapter: Int, offset: Int, selection: String, sentence: String) -> SaveResult {
+    func savePassage(bookID: UUID, chapter: Int, offset: Int, selection: String, sentence: String,
+                     translation: (text: String, source: String)? = nil) -> SaveResult {
         guard let book = books.first(where: { $0.id == bookID }), book.chapters.indices.contains(chapter) else { return .failed }
         let selection = selection.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !selection.isEmpty else { return .failed }
         if favorite(matching: selection) != nil { return .alreadySaved }
         let entry = WordDictionary.shared.lookup(selection)
+        // Without an entry the key still follows the form table, so "peeped" is found again as "peep".
+        let key = WordDictionary.shared.headword(for: selection)
         let passage = SavedPassage(
             bookID: bookID, bookTitle: book.title, chapterTitle: book.chapters[chapter].title, chapterIndex: chapter,
             offset: max(0, min(offset, book.chapters[chapter].length)),
             selection: String(selection.prefix(500)), sentence: String(sentence.prefix(2_000)),
-            headword: entry?.headword, phonetic: entry?.phonetic, definition: entry?.definition,
-            createdAt: .now, reviewStage: 0, dueAt: .now)
+            headword: entry?.headword ?? (key == WordDictionary.normalize(selection) ? nil : key), phonetic: entry?.phonetic, definition: entry?.definition ?? translation?.text,
+            createdAt: .now, reviewStage: 0, dueAt: .now, definitionSource: entry == nil ? translation?.source : nil)
         do {
             try commit(books: books, favorites: [passage] + favorites, fingerprints: fingerprints)
             return .saved

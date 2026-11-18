@@ -45,6 +45,33 @@
     }
 }
 
+/// A run of words is no dictionary entry: the card shows the stub engine's translation in its place, and still closes on a tap.
+- (void)testTranslatesSelectedSentence {
+    _app = [[XCUIApplication alloc] init];
+    _app.launchArguments = @[@"-freshLibrary", @"-readerPageTurn", @"scroll", @"-readerTipSeen", @"YES",
+                             @"-translationEngine", @"stub", @"-translationAutomatic", @"YES"];
+    [_app launch];
+    [[_app.buttons matchingPredicate:[NSPredicate predicateWithFormat:@"identifier BEGINSWITH 'book-'"]].firstMatch tap];
+    XCUIElement *chapters = _app.buttons[@"open-chapters"];
+    XCTAssertTrue([chapters waitForExistenceWithTimeout:3]);
+    [chapters tap];
+    XCUIElement *first = [_app.collectionViews.cells elementBoundByIndex:0];
+    XCTAssertTrue([first waitForExistenceWithTimeout:3]);
+    [first tap];
+    [[self at:0.5 y:0.5] tap]; // Puts the toolbars away.
+    [NSThread sleepForTimeInterval:1];
+    XCTAssertFalse(_app.buttons[@"open-chapters"].hittable, @"the toolbars are still up");
+    // Holding on after the long press extends the selection word by word.
+    [[self at:0.15 y:0.35] pressForDuration:1.0 thenDragToCoordinate:[self at:0.85 y:0.45]];
+    XCUIElement *translation = [_app descendantsMatchingType:XCUIElementTypeAny][@"translation"];
+    XCTAssertTrue([translation waitForExistenceWithTimeout:3], @"selecting several lines showed no translation");
+    XCTAssertTrue([translation.label hasPrefix:@"译文："], @"unexpected translation %@", translation.label);
+    XCUIElement *card = [_app descendantsMatchingType:XCUIElementTypeAny][@"lookup-card"];
+    [[self at:0.5 y:0.15] tap];
+    NSPredicate *gone = [NSPredicate predicateWithFormat:@"exists == NO"];
+    [self waitForExpectations:@[[self expectationForPredicate:gone evaluatedWithObject:card handler:nil]] timeout:3];
+}
+
 /// Long presses a word, expects its card, then taps the selection away and expects the card gone.
 - (void)lookUp:(NSString *)when {
     [self lookUp:when closingAt:[self at:0.4 y:0.4]];

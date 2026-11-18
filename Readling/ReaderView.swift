@@ -1,6 +1,6 @@
 import AVFoundation
 import SwiftUI
-import Translation
+@preconcurrency import Translation
 import UIKit
 
 struct ReaderView: View {
@@ -258,7 +258,7 @@ struct ReaderView: View {
                 LookupCard(selection: lookup, entry: WordDictionary.shared.lookup(lookup.text),
                            isSaved: store.favorite(matching: lookup.text) != nil,
                            palette: palette,
-                           onToggleSaved: { toggleSaved(lookup) })
+                           onToggleSaved: { toggleSaved(lookup, translation: $0) })
             }
             .compositingGroup()
             .shadow(color: .black.opacity(0.14), radius: 16, y: 4)
@@ -563,18 +563,18 @@ struct ReaderView: View {
     }
 
     /// The card's star: saves the word, or takes it back out when it's already in the word list.
-    private func toggleSaved(_ selection: ReadingSelection) {
+    private func toggleSaved(_ selection: ReadingSelection, translation: (text: String, source: String)?) {
         if let saved = store.favorite(matching: selection.text) {
             store.deleteFavorite(id: saved.id)
             toast = "已从生词本移除"
         } else {
-            save(selection)
+            save(selection, translation: translation)
         }
     }
 
-    private func save(_ selection: ReadingSelection) {
+    private func save(_ selection: ReadingSelection, translation: (text: String, source: String)? = nil) {
         let result = store.savePassage(bookID: bookID, chapter: chapter, offset: selection.offset,
-                                       selection: selection.text, sentence: selection.sentence)
+                                       selection: selection.text, sentence: selection.sentence, translation: translation)
         switch result {
         case .saved: toast = "已加入生词本"
         case .alreadySaved: toast = "生词本里已经有这个词"
@@ -616,14 +616,34 @@ struct LookupCard: View {
     let isSaved: Bool
     /// The card takes the reading theme's toolbar shade and ink, like the bars around the page.
     var palette = ReaderPalette(day: ReaderTheme.defaultDay, night: ReaderTheme.defaultNight)
-    var onToggleSaved: () -> Void
+    /// Passes the machine translation shown in place of a dictionary entry, to keep with the saved word.
+    var onToggleSaved: ((text: String, source: String)?) -> Void
     @AppStorage("dictionaryExpandByDefault") private var expandByDefault = false
+    @AppStorage(TranslationService.automaticKey) private var automaticTranslation = true
     @State private var expanded: Bool?
     @State private var openPhrases: Set<String> = []
-    @State private var translating = false
     @State private var copied = false
+    @State private var translation: TranslationService.Result?
+    @State private var translationError: TranslationFailure?
+    @State private var translationAttempt = 0
+    @State private var languagePack: TranslationSession.Configuration?
 
     private var isExpanded: Bool { expanded ?? expandByDefault }
+
+    private var wordCount: Int { selection.text.split(whereSeparator: \.isWhitespace).count }
+    /// A sentence or a longer run of words.
+    private var isExpression: Bool { wordCount > 3 }
+    /// Nothing in the dictionary for a sentence: the card is just its translation, without repeating the text.
+    private var isTranslationOnly: Bool { entry == nil && isExpression }
+
+    private var translationRequest: TranslationRequest {
+        wordCount == 1 ? .explain(word: selection.text, sentence: selection.sentence) : .translate(selection.text)
+    }
+
+    private var savedTranslation: (text: String, source: String)? {
+        guard let translation, translation.isFinal else { return nil }
+        return (translation.text, "机器翻译 · \(translation.engine.title)")
+    }
 
     private var isLikelyName: Bool {
         guard let first = selection.text.first, first.isUppercase else { return false }
@@ -633,12 +653,17 @@ struct LookupCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(entry?.headword ?? selection.text)
-                        .font(.system(.title2, design: .serif).weight(.semibold))
-                        .lineLimit(2).minimumScaleFactor(0.7)
-                    if let phonetic = entry?.phonetic, !phonetic.isEmpty {
-                        Text("/\(phonetic)/").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                HStack(alignment: isTranslationOnly ? .top : .firstTextBaseline, spacing: 8) {
+                    if isTranslationOnly {
+                        // The sentence stays in view on the page above, so the translation takes its place.
+                        translationView.frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text(entry?.headword ?? selection.text)
+                            .font(.system(.title2, design: .serif).weight(.semibold))
+                            .lineLimit(2).minimumScaleFactor(0.7)
+                        if let phonetic = entry?.phonetic, !phonetic.isEmpty {
+                            Text("/\(phonetic)/").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        }
                     }
                     Button { Pronunciation.speak(entry?.headword ?? selection.text) } label: {
                         Image(systemName: "speaker.wave.2").font(.subheadline)
@@ -646,7 +671,7 @@ struct LookupCard: View {
                     .accessibilityLabel("朗读")
                     .accessibilityIdentifier("speak-selection")
                     Spacer(minLength: 0)
-                    Button(action: onToggleSaved) {
+                    Button { onToggleSaved(savedTranslation) } label: {
                         Image(systemName: isSaved ? "star.fill" : "star").font(.body).foregroundStyle(Color.accent)
                     }
                     .accessibilityLabel(isSaved ? "已在生词本" : "加入生词本")
@@ -663,16 +688,19 @@ struct LookupCard: View {
                     }
                     .frame(maxHeight: isExpanded ? 340 : 160)
                     .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(selection.text.contains(" ") ? "离线词典里没有这个词组。"
-                             : isLikelyName ? "离线词典里没有这个词，它可能是人名或地名。" : "离线词典里没有这个词。")
-                            .font(.callout)
-                        if DictionaryDownloads.shared.hasMoreToDownload {
-                            Text("可在“设置 › 词典”下载更多词库。").font(.caption)
+                } else if !isTranslationOnly {
+                    VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(selection.text.contains(" ") ? "离线词典里没有这个词组。"
+                                 : isLikelyName ? "离线词典里没有这个词，它可能是人名或地名。" : "离线词典里没有这个词。")
+                                .font(.callout)
+                            if DictionaryDownloads.shared.hasMoreToDownload {
+                                Text("可在“设置 › 词典”下载更多词库。").font(.caption)
+                            }
                         }
+                        .foregroundStyle(.secondary)
+                        translationView
                     }
-                    .foregroundStyle(.secondary)
                 }
             }
             .foregroundStyle(Color(uiColor: palette.ink))
@@ -685,10 +713,6 @@ struct LookupCard: View {
                     Label(copied ? "已拷贝" : "拷贝", systemImage: copied ? "checkmark" : "doc.on.doc").frame(maxWidth: .infinity)
                 }
                 .accessibilityIdentifier("copy-selection")
-                Button { translating = true } label: {
-                    Label("翻译", systemImage: "translate").frame(maxWidth: .infinity)
-                }
-                .accessibilityIdentifier("translate-selection")
                 ShareLink(item: selection.text) {
                     Label("分享", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
                 }
@@ -704,11 +728,66 @@ struct LookupCard: View {
             .font(.subheadline)
             .buttonStyle(.borderless)
         }
-        .translationPresentation(isPresented: $translating, text: selection.text)
+        .task(id: translationAttempt) { await translate() }
+        .translationTask(languagePack) { session in
+            // The system asks before downloading; once it's in, try again.
+            if (try? await session.prepareTranslation()) != nil { translationAttempt += 1 }
+        }
         .padding(16)
         .background(Color(uiColor: palette.chrome), in: RoundedRectangle(cornerRadius: 20))
         .tint(.accent)
         .accessibilityIdentifier("lookup-card")
+    }
+
+    /// Fills in for a missing dictionary entry: the engine's answer, or why there is none.
+    @ViewBuilder private var translationView: some View {
+        if let translation {
+            // A word translated on its own, out of context, is a guess; keep it quieter than a definition.
+            let isGuess = !isExpression && !TranslationService.shared.engine(translation.engine).capabilities.contains(.explain)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(translation.text).font(.callout)
+                        .foregroundStyle(isGuess ? .secondary : .primary)
+                        .accessibilityIdentifier("translation")
+                    Text("机器翻译 · \(translation.engine.title)").font(.caption2).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+            }
+            .frame(maxHeight: 160)
+            .fixedSize(horizontal: false, vertical: true)
+        } else if let translationError {
+            HStack(alignment: .firstTextBaseline) {
+                Text(translationError.localizedDescription).font(.caption).foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                switch translationError {
+                case .needsLanguagePack:
+                    Button("下载") { languagePack = .init(source: TranslationService.source, target: TranslationService.target) }
+                        .font(.subheadline)
+                case .unsupported: EmptyView()
+                case .failed: Button("重试") { translationAttempt += 1 }.font(.subheadline)
+                }
+            }
+        } else if automaticTranslation || translationAttempt > 0 {
+            ProgressView().controlSize(.small)
+        } else {
+            Button("显示译文") { translationAttempt += 1 }
+                .font(.subheadline)
+                .accessibilityIdentifier("show-translation")
+        }
+    }
+
+    private func translate() async {
+        guard entry == nil, automaticTranslation || translationAttempt > 0 else { return }
+        translation = nil
+        translationError = nil
+        do {
+            for try await result in TranslationService.shared.run(translationRequest) { translation = result }
+        } catch is CancellationError {
+        } catch {
+            translation = nil
+            translationError = error as? TranslationFailure ?? .failed(error.localizedDescription)
+        }
     }
 
     /// What the card always shows: the short definition and how the tapped form relates to it.

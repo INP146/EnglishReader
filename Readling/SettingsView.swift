@@ -1,5 +1,6 @@
 import PhotosUI
 import SwiftUI
+@preconcurrency import Translation
 
 /// The app's own Settings tab, laid out like the system Settings app but in
 /// the app's paper and card colors.
@@ -17,6 +18,9 @@ struct SettingsView: View {
                             Spacer()
                             if !DictionaryDownloads.shared.updates.isEmpty { UpdateBadge() }
                         }
+                    }
+                    NavigationLink { TranslationSettingsView() } label: {
+                        SettingsIconLabel("翻译", systemImage: "translate", color: .indigo)
                     }
                 }
                 Section {
@@ -234,6 +238,49 @@ private struct ReaderThemeSwatch: View {
             .background(Color(hex: theme.paper), in: Circle())
             .overlay { Circle().strokeBorder(Color.primary.opacity(0.15)) }
             .accessibilityHidden(true)
+    }
+}
+
+// MARK: Translation
+
+struct TranslationSettingsView: View {
+    @AppStorage(TranslationService.automaticKey) private var automatic = true
+    @State private var status: LanguageAvailability.Status?
+    @State private var download: TranslationSession.Configuration?
+
+    var body: some View {
+        SettingsList {
+            Section {
+                LabeledContent("翻译引擎", value: TranslationService.shared.selectedEngine.title)
+            }
+            Section {
+                LabeledContent("英语 → 简体中文") {
+                    switch status {
+                    case nil: ProgressView()
+                    case .installed: Text("已下载")
+                    case .supported:
+                        Button("下载语言包") { download = .init(source: TranslationService.source, target: TranslationService.target) }
+                            .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.small)
+                    default: Text("不支持")
+                    }
+                }
+            } header: { Text("Apple 本机翻译") } footer: {
+                Text("在本机翻译，不联网。语言包由系统管理，其他 app 也能使用。")
+            }
+            Section {
+                Toggle("查不到时自动翻译", isOn: $automatic)
+            } footer: {
+                Text("词典里没有的词和选中的句子，在单词卡里直接显示译文。关闭后点“显示译文”才翻译。")
+            }
+        }
+        .navigationTitle("翻译")
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: download == nil) { status = await AppleTranslationEngine.status() }
+        .translationTask(download) { session in
+            try? await session.prepareTranslation()
+            status = await AppleTranslationEngine.status()
+            download = nil
+        }
     }
 }
 

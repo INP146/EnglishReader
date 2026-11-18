@@ -189,7 +189,7 @@ struct WordRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(item.displayWord).font(.system(.headline, design: .serif))
+                Text(item.displayWord).font(.system(.headline, design: .serif)).lineLimit(2)
                 if let phonetic = item.phonetic, !phonetic.isEmpty {
                     Text("/\(phonetic)/").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -222,7 +222,8 @@ struct WordDetail: View {
                     Section {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(alignment: .firstTextBaseline) {
-                                Text(item.displayWord).font(.system(.largeTitle, design: .serif).weight(.semibold))
+                                Text(item.displayWord)
+                                    .font(item.isExpression ? .system(.title3, design: .serif) : .system(.largeTitle, design: .serif).weight(.semibold))
                                 if let phonetic = item.phonetic, !phonetic.isEmpty {
                                     Text("/\(phonetic)/").foregroundStyle(.secondary)
                                 }
@@ -231,6 +232,9 @@ struct WordDetail: View {
                                 Text("书中的形式：\(item.selection)").font(.footnote).foregroundStyle(.secondary)
                             }
                             Text(item.definition ?? "离线词典里没有这个词的释义。").textSelection(.enabled)
+                            if let source = item.definitionSource {
+                                Text(source).font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                         .padding(.vertical, 6)
                     }
@@ -283,7 +287,9 @@ struct ReviewView: View {
                     ProgressView(value: Double(reviewed), total: Double(reviewed + queue.count)).tint(.accent)
                     Spacer()
                     VStack(spacing: 18) {
-                        Text(item.displayWord).font(.system(size: 40, weight: .semibold, design: .serif))
+                        Text(item.displayWord)
+                            .font(item.isExpression ? .system(.title2, design: .serif) : .system(size: 40, weight: .semibold, design: .serif))
+                            .multilineTextAlignment(.center)
                         Text(highlightedSentence(item.sentence, word: item.selection))
                             .font(.system(.title3, design: .serif)).lineSpacing(6)
                             .multilineTextAlignment(.center).foregroundStyle(.secondary)

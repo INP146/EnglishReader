@@ -97,6 +97,23 @@ struct LibraryTests {
         #expect(LibraryStore(fileURL: file).favorites.count == 1)
     }
 
+    @Test func savedExpressionKeepsItsTranslationButWordsKeepTheDictionary() async throws {
+        let folder = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LibraryStore(fileURL: folder.appendingPathComponent("library.json"))
+        let sample = try #require(store.books.first)
+        let sentence = "Alice was beginning to get very tired of sitting by her sister."
+        #expect(store.savePassage(bookID: sample.id, chapter: 0, offset: 0, selection: sentence, sentence: sentence,
+                                  translation: ("爱丽丝开始觉得很累。", "机器翻译 · 测试引擎")) == .saved)
+        let saved = try #require(store.favorite(matching: sentence))
+        #expect(saved.definition == "爱丽丝开始觉得很累。" && saved.definitionSource == "机器翻译 · 测试引擎")
+        #expect(saved.isExpression && saved.displayWord == sentence)
+        store.savePassage(bookID: sample.id, chapter: 0, offset: 0, selection: "tired", sentence: sentence,
+                          translation: ("累", "机器翻译 · 测试引擎"))
+        let word = try #require(store.favorite(matching: "tired"))
+        #expect(word.definition != "累" && word.definitionSource == nil && !word.isExpression)
+    }
+
     @Test func reviewSchedulesLongerGapsUntilMastered() async throws {
         let folder = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: folder) }

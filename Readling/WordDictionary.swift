@@ -202,9 +202,12 @@ final class WordDictionary {
     }
 
     /// The dictionary key for saving and de-duplicating: the base form when the
-    /// dictionary knows it, otherwise the normalized selection itself.
+    /// dictionary knows it, otherwise the normalized selection itself. Runs of
+    /// words it doesn't know stay as written: "she was going" is not "she be go".
     func headword(for text: String) -> String {
-        lookup(text)?.headword.lowercased() ?? lemma(of: Self.normalize(text))
+        if let entry = lookup(text) { return entry.headword.lowercased() }
+        let key = Self.normalize(text)
+        return key.contains(" ") ? key : lemma(of: key)
     }
 
     func lookup(_ raw: String) -> DictionaryEntry? {
