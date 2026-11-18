@@ -750,6 +750,9 @@ struct LookupCard: View {
                         .foregroundStyle(isGuess ? .secondary : .primary)
                         .accessibilityIdentifier("translation")
                     Text("机器翻译 · \(translation.engine.title)").font(.caption2).foregroundStyle(.secondary)
+                    if let notice = translation.notice {
+                        Text(notice).font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
@@ -764,8 +767,8 @@ struct LookupCard: View {
                 case .needsLanguagePack:
                     Button("下载") { languagePack = .init(source: TranslationService.source, target: TranslationService.target) }
                         .font(.subheadline)
-                case .unsupported: EmptyView()
-                case .failed: Button("重试") { translationAttempt += 1 }.font(.subheadline)
+                case .unsupported, .notConfigured: EmptyView()
+                case .offline, .failed: Button("重试") { translationAttempt += 1 }.font(.subheadline)
                 }
             }
         } else if automaticTranslation || translationAttempt > 0 {

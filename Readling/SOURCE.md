@@ -49,3 +49,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Online translation
+
+When the dictionary has no entry, the lookup card translates with Apple's on-device Translation framework by default, which makes no network requests. The user may instead choose an online engine (an OpenAI-compatible API) and supply its address, model and their own API key; the app has no backend and pays for no service. Only then is the selected text, and for single words the sentence around it, sent to that provider, under the provider's own privacy policy. The rest of the book and the word list are never uploaded. Keys stay in this device's keychain (not synced, not backed up). This is explained in 设置 › 翻译 and 设置 › 关于.

@@ -9,24 +9,27 @@ struct TranslationTests {
         let id: TranslationEngineID
         let capabilities: Set<TranslationCapability>
         let answer: String?
+        var failure: TranslationFailure = .failed("boom")
         var requests: [TranslationRequest] = []
 
-        init(_ id: TranslationEngineID, capabilities: Set<TranslationCapability> = [.translate], answer: String?) {
+        init(_ id: TranslationEngineID, capabilities: Set<TranslationCapability> = [.translate], answer: String?,
+             failure: TranslationFailure = .failed("boom")) {
             self.id = id
             self.capabilities = capabilities
             self.answer = answer
+            self.failure = failure
         }
 
         func run(_ request: TranslationRequest) -> AsyncThrowingStream<String, Error> {
             requests.append(request)
-            let answer = answer
+            let answer = answer, failure = failure
             return AsyncThrowingStream { continuation in
                 if let answer {
                     continuation.yield(String(answer.prefix(2)))
                     continuation.yield(answer)
                     continuation.finish()
                 } else {
-                    continuation.finish(throwing: TranslationFailure.failed("boom"))
+                    continuation.finish(throwing: failure)
                 }
             }
         }
@@ -53,7 +56,27 @@ struct TranslationTests {
         let apple = FakeEngine(.apple, answer: "苹果译文")
         let service = TranslationService(selection: { .stub }, engines: { $0 == .apple ? apple : FakeEngine(.stub, answer: nil) })
         let all = try await results(service, .translate("hello"))
-        #expect(all.last == TranslationService.Result(text: "苹果译文", engine: .apple, isFinal: true))
+        #expect(all.last == TranslationService.Result(text: "苹果译文", engine: .apple, isFinal: true, notice: "测试引擎：boom"))
+    }
+
+    @Test func fallsBackQuietlyWhenTheChosenEngineIsUnsetOrOffline() async throws {
+        for failure in [TranslationFailure.notConfigured, .offline] {
+            let apple = FakeEngine(.apple, answer: "苹果译文")
+            let service = TranslationService(selection: { .openAI }, engines: { $0 == .apple ? apple : FakeEngine(.openAI, answer: nil, failure: failure) })
+            let all = try await results(service, .translate("hello"))
+            #expect(all.last == TranslationService.Result(text: "苹果译文", engine: .apple, isFinal: true))
+        }
+    }
+
+    @Test func reportsTheChosenEnginesFailureOverTheFallbacks() async throws {
+        let service = TranslationService(selection: { .openAI }, engines: {
+            $0 == .apple ? FakeEngine(.apple, answer: nil, failure: .needsLanguagePack) : FakeEngine(.openAI, answer: nil, failure: .failed("API Key 无效。"))
+        })
+        await #expect(throws: TranslationFailure.failed("API Key 无效。")) { _ = try await results(service, .translate("hello")) }
+        let offline = TranslationService(selection: { .openAI }, engines: {
+            $0 == .apple ? FakeEngine(.apple, answer: nil, failure: .needsLanguagePack) : FakeEngine(.openAI, answer: nil, failure: .offline)
+        })
+        await #expect(throws: TranslationFailure.needsLanguagePack) { _ = try await results(offline, .translate("hello")) }
     }
 
     @Test func enginesThatCannotExplainTranslateTheWordAlone() async throws {

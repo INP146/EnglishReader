@@ -13,27 +13,37 @@ enum TranslationCapability: Sendable { case translate, explain }
 
 enum TranslationEngineID: String, CaseIterable, Sendable {
     case apple
+    case openAI
     /// Answers instantly with canned text; picked by UI tests with `-translationEngine stub`.
     case stub
 
     var title: String {
         switch self {
         case .apple: "Apple 本机翻译"
+        case .openAI: "OpenAI 兼容"
         case .stub: "测试引擎"
         }
     }
+
+    /// The engines the user can pick in Settings, in order.
+    static let selectable: [TranslationEngineID] = [.apple, .openAI]
 }
 
 enum TranslationFailure: LocalizedError, Equatable {
     /// Apple's on-device model for English → Chinese isn't downloaded yet.
     case needsLanguagePack
     case unsupported
+    /// An online engine without its address, key or model yet.
+    case notConfigured
+    case offline
     case failed(String)
 
     var errorDescription: String? {
         switch self {
         case .needsLanguagePack: "需要先下载英语到简体中文的翻译语言包。"
         case .unsupported: "这台设备不支持英语到简体中文的本机翻译。"
+        case .notConfigured: "还没有配置这个翻译引擎。"
+        case .offline: "没有网络连接。"
         case .failed(let message): message
         }
     }
@@ -56,6 +66,8 @@ final class TranslationService {
         var text: String
         var engine: TranslationEngineID
         var isFinal: Bool
+        /// Why the chosen engine didn't answer, when another one did.
+        var notice: String?
     }
 
     static let engineKey = "translationEngine"
@@ -86,21 +98,30 @@ final class TranslationService {
     nonisolated static func engine(_ id: TranslationEngineID) -> any TranslationEngine {
         switch id {
         case .apple: AppleTranslationEngine()
+        case .openAI: OpenAICompatibleEngine(configuration: OpenAICompatibleEngine.saved())
         case .stub: StubTranslationEngine()
         }
     }
+
+    /// Forgets finished results, after an engine's settings change.
+    func clearCache() { cache.removeAll() }
 
     func run(_ request: TranslationRequest) -> AsyncThrowingStream<Result, Error> {
         let chain = [selectedEngine, .apple].reduce(into: [TranslationEngineID]()) { if !$0.contains($1) { $0.append($1) } }
         return AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
-                var lastError: Error?
+                var errors: [(engine: TranslationEngineID, error: Error)] = []
+                // Not configured or offline is expected, and says nothing a fallback answer needs to explain.
+                func notice() -> String? {
+                    guard let first = errors.first, !Self.isExpected(first.error) else { return nil }
+                    return "\(first.engine.title)：\(first.error.localizedDescription)"
+                }
                 for id in chain {
                     let engine = engine(id)
                     let asked = Self.request(request, for: engine)
                     let key = CacheKey(engine: id, request: asked)
                     if let cached = cache[key] {
-                        continuation.yield(Result(text: cached, engine: id, isFinal: true))
+                        continuation.yield(Result(text: cached, engine: id, isFinal: true, notice: notice()))
                         continuation.finish()
                         return
                     }
@@ -108,12 +129,12 @@ final class TranslationService {
                     do {
                         for try await text in engine.run(asked) {
                             latest = text
-                            continuation.yield(Result(text: text, engine: id, isFinal: false))
+                            continuation.yield(Result(text: text, engine: id, isFinal: false, notice: notice()))
                         }
                         let text = latest?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                         guard !text.isEmpty else { throw TranslationFailure.failed("没有得到译文。") }
                         cache[key] = text
-                        continuation.yield(Result(text: text, engine: id, isFinal: true))
+                        continuation.yield(Result(text: text, engine: id, isFinal: true, notice: notice()))
                         continuation.finish()
                         return
                     } catch is CancellationError {
@@ -122,13 +143,19 @@ final class TranslationService {
                     } catch {
                         // Once an engine has shown part of its answer, switching engines would replace it mid-read.
                         if latest != nil { continuation.finish(throwing: error); return }
-                        lastError = error
+                        errors.append((id, error))
                     }
                 }
-                continuation.finish(throwing: lastError ?? TranslationFailure.failed("没有得到译文。"))
+                // The chosen engine's own failure says more than the fallback's, unless it was only unset or offline.
+                let reported = errors.first { !Self.isExpected($0.error) } ?? errors.last
+                continuation.finish(throwing: reported?.error ?? TranslationFailure.failed("没有得到译文。"))
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    private nonisolated static func isExpected(_ error: Error) -> Bool {
+        error as? TranslationFailure == .notConfigured || error as? TranslationFailure == .offline
     }
 
     /// Engines that can't explain a word in context translate the word alone.

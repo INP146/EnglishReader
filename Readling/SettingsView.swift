@@ -244,14 +244,40 @@ private struct ReaderThemeSwatch: View {
 // MARK: Translation
 
 struct TranslationSettingsView: View {
+    @AppStorage(TranslationService.engineKey) private var engine: TranslationEngineID = .apple
     @AppStorage(TranslationService.automaticKey) private var automatic = true
+    /// Watched so the engine rows refresh after the configuration page changes it.
+    @AppStorage(OpenAICompatibleEngine.modelKey) private var openAIModel = ""
     @State private var status: LanguageAvailability.Status?
     @State private var download: TranslationSession.Configuration?
+    @State private var configuring: TranslationEngineID?
 
     var body: some View {
         SettingsList {
             Section {
-                LabeledContent("翻译引擎", value: TranslationService.shared.selectedEngine.title)
+                ForEach(TranslationEngineID.selectable, id: \.self) { id in
+                    Button { select(id) } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(id.title).foregroundStyle(Color.primary)
+                                if let detail = detail(id) {
+                                    Text(detail).font(.caption).foregroundStyle(Color.secondary)
+                                }
+                            }
+                            Spacer()
+                            if engine == id { Image(systemName: "checkmark").fontWeight(.semibold) }
+                        }
+                    }
+                }
+            } header: { Text("翻译引擎") } footer: {
+                Text("联网引擎没有配置好、请求失败或没有网络时，改用 Apple 本机翻译。")
+            }
+            Section {
+                NavigationLink { OpenAIEngineSettingsView() } label: {
+                    LabeledContent(TranslationEngineID.openAI.title, value: OpenAICompatibleEngine.saved() == nil ? "未配置" : "已配置")
+                }
+            } header: { Text("联网引擎") } footer: {
+                Text("使用联网引擎时，选中的文字和所在的句子会发给你选择的服务商，按服务商自己的隐私政策处理；书的其余内容和生词本不会上传。API Key 由你自己提供，费用由服务商向你收取。")
             }
             Section {
                 LabeledContent("英语 → 简体中文") {
@@ -275,11 +301,208 @@ struct TranslationSettingsView: View {
         }
         .navigationTitle("翻译")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $configuring) { _ in OpenAIEngineSettingsView() }
         .task(id: download == nil) { status = await AppleTranslationEngine.status() }
         .translationTask(download) { session in
             try? await session.prepareTranslation()
             status = await AppleTranslationEngine.status()
             download = nil
+        }
+    }
+
+    private func detail(_ id: TranslationEngineID) -> String? {
+        switch id {
+        case .openAI: OpenAICompatibleEngine.saved().map(\.model) ?? String(localized: "未配置")
+        default: nil
+        }
+    }
+
+    /// Picking an engine that isn't set up yet goes straight to its configuration.
+    private func select(_ id: TranslationEngineID) {
+        engine = id
+        if id == .openAI, OpenAICompatibleEngine.saved() == nil { configuring = id }
+    }
+}
+
+/// Address, key and model for an OpenAI-compatible service, and a test request.
+struct OpenAIEngineSettingsView: View {
+    @AppStorage(OpenAICompatibleEngine.baseURLKey) private var address = OpenAICompatibleEngine.defaultBaseURL
+    @AppStorage(OpenAICompatibleEngine.modelKey) private var model = ""
+    @State private var savedKey: String?
+    @State private var newKey = ""
+    @State private var keyError: String?
+    @State private var test: Test?
+
+    private enum Test { case running, passed(String), failed(String) }
+
+    /// Well-known services' addresses, to fill in rather than type.
+    private static let services: [(name: String, address: String)] = [
+        ("OpenAI", "https://api.openai.com/v1"),
+        ("DeepSeek", "https://api.deepseek.com/v1"),
+        ("OpenRouter", "https://openrouter.ai/api/v1"),
+        ("通义千问", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        ("Kimi", "https://api.moonshot.cn/v1"),
+    ]
+
+    private var isAddressValid: Bool { OpenAICompatibleEngine.baseURL(address) != nil }
+
+    var body: some View {
+        SettingsList {
+            Section {
+                TextField("https://…", text: $address)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Menu("填入常用服务") {
+                    ForEach(Self.services, id: \.address) { service in
+                        Button(service.name) { address = service.address }
+                    }
+                }
+            } header: { Text("服务地址") } footer: {
+                if isAddressValid {
+                    // A plain string, so the example address isn't turned into a link.
+                    Text(String(localized: "填到 /v1 这一级。局域网里的 Ollama 填 http://电脑的 IP 地址:11434/v1。"))
+                } else {
+                    Text("地址要以 https:// 或 http:// 开头。")
+                }
+            }
+            Section {
+                if let savedKey {
+                    LabeledContent("已保存", value: "••••\(savedKey.suffix(4))")
+                        .accessibilityIdentifier("saved-key")
+                }
+                SecureField(savedKey == nil ? "粘贴 API Key" : "换一个 Key", text: $newKey)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .onSubmit(saveKey)
+                Button("保存 Key", action: saveKey)
+                    .disabled(newKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if savedKey != nil {
+                    Button("删除 Key", role: .destructive, action: deleteKey)
+                }
+            } header: { Text("API Key") } footer: {
+                if let keyError {
+                    Text(keyError).foregroundStyle(.red)
+                } else {
+                    Text("Key 只存在这台设备的钥匙串里，不随 iCloud 同步，也不进备份。建议为 Readling 单独创建一个 Key，并在服务商后台设置额度上限。不需要 Key 的服务（如本机的 Ollama）可以留空。")
+                }
+            }
+            Section {
+                TextField("模型名", text: $model)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                NavigationLink("从服务获取模型列表") { TranslationModelList(address: address, selection: $model) }
+                    .disabled(!isAddressValid)
+            } header: { Text("模型") } footer: {
+                Text("获取列表后从中选择，也可以直接填写服务商文档里的模型名。")
+            }
+            Section {
+                Button("测试", action: runTest)
+                    .disabled(OpenAICompatibleEngine.saved() == nil || isTesting)
+                switch test {
+                case nil: EmptyView()
+                case .running: ProgressView()
+                case .passed(let text): Text(text).textSelection(.enabled)
+                case .failed(let message): Text(message).foregroundStyle(.red)
+                }
+            } footer: {
+                Text("翻译一句短的英文，确认地址、Key 和模型可用。")
+            }
+        }
+        .navigationTitle(TranslationEngineID.openAI.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { savedKey = TranslationKeychain.shared.key(for: .openAI) }
+        .onChange(of: address) { changed() }
+        .onChange(of: model) { changed() }
+    }
+
+    private var isTesting: Bool { if case .running = test { true } else { false } }
+
+    private func changed() {
+        test = nil
+        TranslationService.shared.clearCache()
+    }
+
+    private func saveKey() {
+        let key = newKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        do {
+            try TranslationKeychain.shared.setKey(key, for: .openAI)
+            savedKey = key
+            newKey = ""
+            keyError = nil
+            changed()
+        } catch {
+            keyError = error.localizedDescription
+        }
+    }
+
+    private func deleteKey() {
+        do {
+            try TranslationKeychain.shared.deleteKey(for: .openAI)
+            savedKey = nil
+            keyError = nil
+            changed()
+        } catch {
+            keyError = error.localizedDescription
+        }
+    }
+
+    private func runTest() {
+        test = .running
+        let engine = OpenAICompatibleEngine(configuration: OpenAICompatibleEngine.saved())
+        Task {
+            var latest = ""
+            do {
+                for try await text in engine.run(.translate("The quick brown fox jumps over the lazy dog.")) { latest = text }
+                test = latest.isEmpty ? .failed(String(localized: "没有得到译文。")) : .passed(latest)
+            } catch {
+                test = .failed(error.localizedDescription)
+            }
+        }
+    }
+}
+
+/// The models a service lists, searchable; picking one fills in the model name.
+private struct TranslationModelList: View {
+    var address: String
+    @Binding var selection: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var models: [String]?
+    @State private var error: String?
+    @State private var query = ""
+
+    var body: some View {
+        SettingsList {
+            if let error {
+                Text(error).foregroundStyle(.secondary)
+            } else if let models {
+                let shown = query.isEmpty ? models : models.filter { $0.localizedCaseInsensitiveContains(query) }
+                ForEach(shown, id: \.self) { model in
+                    Button { selection = model; dismiss() } label: {
+                        HStack {
+                            Text(verbatim: model).foregroundStyle(Color.primary)
+                            Spacer()
+                            if model == selection { Image(systemName: "checkmark").fontWeight(.semibold) }
+                        }
+                    }
+                }
+            } else {
+                ProgressView().frame(maxWidth: .infinity)
+            }
+        }
+        .navigationTitle("模型")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query)
+        .task {
+            guard let baseURL = OpenAICompatibleEngine.baseURL(address) else { return }
+            let configuration = OpenAICompatibleEngine.Configuration(baseURL: baseURL, key: TranslationKeychain.shared.key(for: .openAI), model: "")
+            do {
+                models = try await OpenAICompatibleEngine.models(configuration)
+                if models?.isEmpty == true { error = String(localized: "服务没有列出模型，请直接填写模型名。") }
+            } catch {
+                self.error = error.localizedDescription
+            }
         }
     }
 }
@@ -461,6 +684,7 @@ struct AboutView: View {
             Section {
                 Text("书籍、阅读位置和生词都只保存在这台设备上，不会上传。删除应用会一并删除。")
                 Text("应用每天最多自动检查一次词典更新；此外只有在打开“词典”设置或下载词典时才会联网。")
+                Text("选用联网翻译引擎后，查不到的词和选中的句子（连同所在的句子）会发给你选择的服务商翻译；书的其余内容和生词本不会上传。默认的 Apple 本机翻译不联网。")
             } header: { Text("数据") }
             Section {
                 Text("释义来自离线英汉词典 ECDICT（MIT 许可）。")
