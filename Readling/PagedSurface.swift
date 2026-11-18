@@ -64,21 +64,23 @@ final class PagedChapter {
     let text: NSString
     private(set) var layouts: [PageLayout] = []
     let wordRanges: [NSRange]
+    let accent: UIColor
     var marked: [NSRange] = []
     var cache: [Int: PageController] = [:]
 
     var pages: [NSRange] { layouts.map(\.range) }
 
-    init(_ chapter: ReaderChapter, number: Int, size: CGFloat, layout: ReaderLayout, ink: UIColor, pageSize: CGSize, forms: Set<String>,
-         resources: URL?) {
+    init(_ chapter: ReaderChapter, number: Int, size: CGFloat, layout: ReaderLayout, ink: UIColor, accent: UIColor, pageSize: CGSize,
+         forms: Set<String>, resources: URL?) {
         self.chapter = chapter
         self.number = number
         text = chapter.text as NSString
+        self.accent = accent
         wordRanges = ReadingSurface.englishWordRanges(in: chapter.text)
         let full = NSTextStorage(attributedString: ReadingSurface.attributedText(for: chapter, size: size, layout: layout,
-                                                                                             ink: ink, resources: resources))
+                                                                                             ink: ink, accent: accent, resources: resources))
         marked = ReaderTextTools.markedRanges(in: chapter.text, words: wordRanges, forms: forms)
-        ReaderTextTools.applyMarks(marked, replacing: [], in: full)
+        ReaderTextTools.applyMarks(marked, replacing: [], color: accent, in: full)
         // Each page is handed some text past what it can hold; a generous first guess saves laying out twice.
         let guess = max(500, Int(pageSize.width * pageSize.height / (size * size * 0.25)))
         var start = 0
@@ -94,7 +96,7 @@ final class PagedChapter {
     func applyMarks(_ forms: Set<String>) {
         let ranges = ReaderTextTools.markedRanges(in: chapter.text, words: wordRanges, forms: forms)
         guard ranges != marked else { return }
-        for page in layouts { page.applyMarks(ranges, replacing: marked) }
+        for page in layouts { page.applyMarks(ranges, replacing: marked, color: accent) }
         marked = ranges
     }
 
@@ -287,7 +289,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
 
     private func makeLayout(for chapter: ReaderChapter, number: Int) -> PagedChapter {
         PagedChapter(chapter, number: number, size: ReaderTypography.pointSize(config.layout.fontSize), layout: config.layout,
-                     ink: config.palette.ink, pageSize: textFrame.size, forms: config.learningForms, resources: config.resources)
+                     ink: config.palette.ink, accent: config.palette.accent, pageSize: textFrame.size, forms: config.learningForms, resources: config.resources)
     }
 
     /// Chapter `number`, laid out on first use; nil past either end of the book.
@@ -323,7 +325,7 @@ final class PagerController: UIViewController, UIPageViewControllerDataSource, U
             text.isScrollEnabled = false
             text.backgroundColor = .clear
             text.textContainerInset = .zero
-            text.tintColor = .readerAccent
+            text.tintColor = config.palette.accent
             text.dataDetectorTypes = []
             text.delegate = self
             text.accessibilityHint = "选中单词或词组即可查词；也可用辅助功能操作选择单词、查词或收藏。"
@@ -736,14 +738,14 @@ final class PageLayout {
         return part.length > 0 ? NSRange(location: part.location - self.range.location, length: part.length) : nil
     }
 
-    func applyMarks(_ ranges: [NSRange], replacing old: [NSRange]) {
+    func applyMarks(_ ranges: [NSRange], replacing old: [NSRange], color: UIColor) {
         // The text held past the page too, should it ever be laid out.
         let held = NSRange(location: range.location, length: storage.length)
         func local(_ range: NSRange) -> NSRange? {
             let part = NSIntersectionRange(range, held)
             return part.length > 0 ? NSRange(location: part.location - held.location, length: part.length) : nil
         }
-        ReaderTextTools.applyMarks(ranges.compactMap(local), replacing: old.compactMap(local), in: storage)
+        ReaderTextTools.applyMarks(ranges.compactMap(local), replacing: old.compactMap(local), color: color, in: storage)
     }
 }
 

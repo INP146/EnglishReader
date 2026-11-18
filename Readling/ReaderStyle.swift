@@ -81,23 +81,24 @@ enum PageTurn: String, CaseIterable, Identifiable {
     var isPaged: Bool { self != .scroll }
 }
 
-/// A paper and ink pair. Day and night each remember their own theme; the
-/// palette resolves between them through the trait collection.
+/// A paper and ink pair, with an accent for links and saved words that stays clear of both.
+/// Day and night each remember their own theme; the palette resolves between them through the trait collection.
 struct ReaderTheme: Identifiable, Equatable {
     let id: String
     let paper: UInt32
     let ink: UInt32
+    let accent: UInt32
     let isDark: Bool
 
     static let all = [
-        ReaderTheme(id: "paper", paper: 0xF7F4ED, ink: 0x292D28, isDark: false),
-        ReaderTheme(id: "white", paper: 0xFFFFFF, ink: 0x222222, isDark: false),
-        ReaderTheme(id: "parchment", paper: 0xEADFC8, ink: 0x3A3125, isDark: false),
-        ReaderTheme(id: "green", paper: 0xCFE3CF, ink: 0x22362A, isDark: false),
-        ReaderTheme(id: "blue", paper: 0xD8E2EC, ink: 0x24303C, isDark: false),
-        ReaderTheme(id: "night", paper: 0x191D1B, ink: 0xC9CEC6, isDark: true),
-        ReaderTheme(id: "black", paper: 0x000000, ink: 0xA8A8A8, isDark: true),
-        ReaderTheme(id: "slate", paper: 0x23272D, ink: 0xBFC5CE, isDark: true)
+        ReaderTheme(id: "paper", paper: 0xF7F4ED, ink: 0x292D28, accent: 0x08785E, isDark: false),
+        ReaderTheme(id: "white", paper: 0xFFFFFF, ink: 0x222222, accent: 0x08785E, isDark: false),
+        ReaderTheme(id: "parchment", paper: 0xEADFC8, ink: 0x3A3125, accent: 0x08705A, isDark: false),
+        ReaderTheme(id: "green", paper: 0xCFE3CF, ink: 0x22362A, accent: 0x1C5FA6, isDark: false),
+        ReaderTheme(id: "blue", paper: 0xD8E2EC, ink: 0x24303C, accent: 0x0A6F5A, isDark: false),
+        ReaderTheme(id: "night", paper: 0x191D1B, ink: 0xC9CEC6, accent: 0x4FD1A0, isDark: true),
+        ReaderTheme(id: "black", paper: 0x000000, ink: 0xA8A8A8, accent: 0x3FC28F, isDark: true),
+        ReaderTheme(id: "slate", paper: 0x23272D, ink: 0xBFC5CE, accent: 0x5ED3A8, isDark: true)
     ]
     static let defaultDay = "paper"
     static let defaultNight = "night"
@@ -123,6 +124,7 @@ struct ReaderPalette: Equatable {
 
     var paper: UIColor { adaptive { UIColor(hex: $0.paper) } }
     var ink: UIColor { adaptive { UIColor(hex: $0.ink) } }
+    var accent: UIColor { adaptive { UIColor(hex: $0.accent) } }
     var secondaryInk: UIColor { adaptive { UIColor(hex: $0.ink).withAlphaComponent(0.5) } }
     /// Toolbars sit a shade away from the page so they read as a separate layer.
     var chrome: UIColor {

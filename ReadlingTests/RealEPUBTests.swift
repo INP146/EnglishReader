@@ -28,7 +28,7 @@ struct RealEPUBTests {
             let layout = ReaderLayout(fontSize: font, typeface: typeface, lineSpacing: 1.6, paragraphSpacing: 0.8, margin: 24)
             for (number, chapter) in chapters.enumerated() {
                 let paged = PagedChapter(chapter, number: number, size: ReaderTypography.pointSize(layout.fontSize), layout: layout,
-                                         ink: .black, pageSize: CGSize(width: 354, height: 640), forms: [], resources: nil)
+                                         ink: .black, accent: .blue, pageSize: CGSize(width: 354, height: 640), forms: [], resources: nil)
                 var next = 0
                 for (index, page) in paged.layouts.enumerated() {
                     #expect(page.range.location == next && page.range.length > 0, "chapter \(number) page \(index) at \(font) pt")
@@ -57,7 +57,7 @@ struct RealEPUBTests {
         let clock = ContinuousClock()
         var paged: PagedChapter?
         let elapsed = clock.measure {
-            paged = PagedChapter(chapter, number: 0, size: 18, layout: ReaderLayout(), ink: .black,
+            paged = PagedChapter(chapter, number: 0, size: 18, layout: ReaderLayout(), ink: .black, accent: .blue,
                                  pageSize: CGSize(width: 354, height: 640), forms: [], resources: nil)
         }
         #expect(paged.map { NSMaxRange($0.pages.last!) } == (text as NSString).length)

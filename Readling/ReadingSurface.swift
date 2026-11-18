@@ -62,7 +62,7 @@ struct ReadingSurface: UIViewRepresentable {
 
     /// The exact string the view displays is chapter.text, so stored offsets never drift.
     static func attributedText(for chapter: ReaderChapter, size: CGFloat, layout: ReaderLayout = ReaderLayout(),
-                               ink: UIColor = .readerInk, resources: URL? = nil) -> NSAttributedString {
+                               ink: UIColor = .readerInk, accent: UIColor = .readerAccent, resources: URL? = nil) -> NSAttributedString {
         let result = NSMutableAttributedString(string: chapter.text)
         let full = NSRange(location: 0, length: result.length)
         let face = layout.typeface
@@ -111,7 +111,7 @@ struct ReadingSurface: UIViewRepresentable {
                 result.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: run.range)
             case .link:
                 guard let target = run.value else { continue }
-                result.addAttributes([.foregroundColor: UIColor.readerAccent, .readerLink: target], range: run.range)
+                result.addAttributes([.foregroundColor: accent, .readerLink: target], range: run.range)
             case .image:
                 guard let resources, let file = run.value else { continue }
                 result.addAttribute(.attachment, value: ReaderImageAttachment(url: resources.appendingPathComponent(file), alt: run.alt), range: run.range)
@@ -275,7 +275,9 @@ struct ReadingSurface: UIViewRepresentable {
                 let margin = value.layout.margin
                 view.textContainerInset = UIEdgeInsets(top: 24, left: margin, bottom: 96, right: margin)
                 view.attributedText = ReadingSurface.attributedText(for: value.chapter, size: size, layout: value.layout,
-                                                                    ink: value.palette.ink, resources: value.resources)
+                                                                    ink: value.palette.ink, accent: value.palette.accent,
+                                                                    resources: value.resources)
+                view.tintColor = value.palette.accent
                 if chapterChanged {
                     wordRanges = ReadingSurface.englishWordRanges(in: value.chapter.text)
                     lastReported = nil
@@ -289,7 +291,7 @@ struct ReadingSurface: UIViewRepresentable {
                 view.setNeedsLayout()
             }
             if marked != value.markedRanges {
-                ReaderTextTools.applyMarks(value.markedRanges, replacing: marked, in: view.textStorage)
+                ReaderTextTools.applyMarks(value.markedRanges, replacing: marked, color: value.palette.accent, in: view.textStorage)
                 marked = value.markedRanges
             }
             if let jump = value.jump, jump.id != lastJumpID {
@@ -612,7 +614,7 @@ enum ReaderTextTools {
         return words.filter { forms.contains(WordDictionary.normalize(string.substring(with: $0))) }
     }
 
-    static func applyMarks(_ ranges: [NSRange], replacing old: [NSRange], in storage: NSTextStorage) {
+    static func applyMarks(_ ranges: [NSRange], replacing old: [NSRange], color: UIColor, in storage: NSTextStorage) {
         let length = storage.length
         storage.beginEditing()
         for range in old where NSMaxRange(range) <= length {
@@ -620,8 +622,8 @@ enum ReaderTextTools {
             storage.removeAttribute(.underlineColor, range: range)
         }
         for range in ranges where NSMaxRange(range) <= length {
-            storage.addAttributes([.underlineStyle: NSUnderlineStyle([.single, .patternDot]).rawValue,
-                                   .underlineColor: UIColor.readerAccent], range: range)
+            storage.addAttributes([.underlineStyle: NSUnderlineStyle([.thick, .patternDot]).rawValue,
+                                   .underlineColor: color], range: range)
         }
         storage.endEditing()
     }
