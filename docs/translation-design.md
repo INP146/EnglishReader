@@ -26,9 +26,10 @@
 
 ## 服务与接口格式
 
-内置 **Apple 本机翻译**（默认服务、离线可用，也是自定义端点失败时的回退）。联网或局域网服务采用**用户自行管理端点（Endpoint）**的形式：用户可添加任意多个端点（例如同时保留 DeepSeek、Claude 中转站、局域网 Ollama、自建 DeepLX），自行切换当前使用哪一个。
+翻译服务分两类，在“设置 › 翻译”里任选一个：
 
-每个自定义端点选择一种**接口格式（API 范式）**，并填写自己的服务地址、可选 API Key 和模型名：
+- **内置翻译服务**：**Apple 本机翻译**（默认、离线可用，也是其他服务失败时的回退）和 **DeepL**（填官方 Key，或填自建 DeepLX 地址）。它们只会翻译。
+- **AI 服务**：用户在“设置 › AI 服务”里管理的大模型端点（例如同时保留 DeepSeek、Claude 中转站、局域网 Ollama）。端点属于 AI 层，供翻译、词典等功能共用，各功能分别选用（见 `docs/ai-design.md`）。每个端点选一种接口格式，填写服务地址、可选 API Key 和模型名：
 
 | 接口格式 | 需要 | 整句翻译 | 语境释义 | 流式输出 | 说明 |
 |---|---|---|---|---|---|
@@ -67,7 +68,8 @@ protocol TranslationEngine {
 ```
 
 - `TranslationService`（单例，与 `WordDictionary` 并列）根据设置选择引擎：引擎不支持 `.explain` 时把 `explain` 降级为翻译这个词；当前引擎没配置或请求失败时退回 Apple 本机翻译，并在结果里带上实际使用的引擎，单词卡据此标注来源。
-- 结果按（引擎、请求）在内存里缓存，同一次阅读里重复点同一个词不重复请求；不写盘。
+- 大模型引擎是 `AITranslationEngine`：把请求写成翻译自己的提示词（`AIPrompt`），交给所选端点的 `AIClient` 发送。AI 层抛出的 `OnlineFailure` 在 `TranslationService` 里统一换成 `TranslationFailure`，单词卡只认后者。
+- 结果按（服务、AI 端点的当前配置、请求）在内存里缓存，同一次阅读里重复点同一个词不重复请求；改了端点的模型或地址后不会用到旧结果；不写盘。
 - 单词卡关闭或换了选区时取消进行中的请求（结构化并发，`Task` 随视图的 `.task(id:)` 取消）。
 
 ### HTTP 客户端：不引入 SDK
@@ -102,22 +104,17 @@ protocol TranslationEngine {
 
 ## 设置 › 翻译
 
-放在“设置”里“词典”下面：
+放在“设置”里“词典”下面。大模型端点本身在“设置 › AI 服务”里管理（见 `docs/ai-design.md`），这里只选用哪一个：
 
-- **翻译服务**：列出内置的 `Apple 本机翻译` 与用户保存的全部自定义端点，点按即切换当前生效的服务；点端点右侧信息图标（或左滑 / 长按）可编辑或删除端点；底部提供 **“添加端点…”**。
-- **添加 / 编辑端点**（弹窗表单）：
-  - **名称**（可选，留空自动取“接口格式 + 域名”）、**接口格式**（OpenAI 兼容 / Claude / Gemini / DeepL）、**填入常用预设**菜单
-  - **服务地址**：支持任意 `https://` 或 `http://` 地址，页脚实时预览最终拼接出的完整请求地址
-  - **API Key**：按端点 `UUID` 独立存入本机 Keychain；局域网无鉴权服务可留空
-  - **模型**（OpenAI 兼容 / Claude / Gemini）：支持直接从当前填写的端点拉取模型列表并搜索选择，也可手填
-  - **测试**按钮（直接用表单当前草稿发请求验证）、编辑态下的**删除端点**按钮
+- **翻译服务**：内置的 `Apple 本机翻译` 与 `DeepL` 并列（DeepL 不是大模型，只能翻译，所以算翻译层自己的服务）。DeepL 未配置时点按先打开配置页，保存后选中；右侧信息图标进入配置页（服务地址可填自建 DeepLX，API Key，测试）。
+- **AI 服务**：列出全部 AI 端点供选择，右侧信息图标编辑端点；底部“添加 AI 服务…”，从这里新建的端点保存后直接选中。端点在别处被删除时，翻译改用 Apple 本机翻译（所选值保留，界面显示 Apple 被选中）。
 - **Apple 本机翻译**：显示语言包状态，未下载时提供下载入口。
 - **查不到时自动翻译**：开关，默认开。
-- **页脚：联网说明**：使用自定义端点时，选中的文字和所在句子会发给该端点，书的其余内容和生词本不上传。“关于”页和 `SOURCE.md` 同步改写。
+- **页脚：联网说明**：使用 DeepL 或 AI 服务时，选中的文字和所在句子会发给该服务，书的其余内容和生词本不上传。“关于”页同步改写。
 
 ### Key 的存放
 
-- 存在 Keychain（`kSecClassGenericPassword`，service `com.inp146.readling.translation`，account 为引擎 id），可访问性 `AfterFirstUnlockThisDeviceOnly`，不随 iCloud 同步、不进备份。
+- 存在 Keychain（`kSecClassGenericPassword`；AI 端点用 service `com.inp146.readling.ai`、account 为端点 UUID，DeepL 用 service `com.inp146.readling.translation`、account `deepL`），可访问性 `AfterFirstUnlockThisDeviceOnly`，不随 iCloud 同步、不进备份。
 - 服务地址、模型名、所选引擎等非机密设置用 `@AppStorage`。
 - 输入框是安全输入，配置页只显示 Key 的末四位。
 - Key 不认 bundle ID，认签名里的 `application-identifier`（不指定访问组时存在它对应的默认组）。用第三方证书重签安装时也能用；换了证书（团队 ID 变了）后读不到原来的 Key，引擎显示“未配置”、翻译退回 Apple 本机翻译，重新填一次即可。同一证书签的其他 app 理论上能读到，这只涉及用户自己装的 app，可以接受。
@@ -143,4 +140,5 @@ protocol TranslationEngine {
 - [x] 第 1 步：`TranslationEngine` 协议与 `TranslationService`、Apple 本机引擎、单词卡内联译文与句子样式、收藏表达并保存译文、设置 › 翻译（语言包状态与下载、自动翻译开关）、桩引擎与 UI 测试（2026-11-18）
 - [x] 第 2 步：SSE 解析、OpenAI 兼容引擎、Keychain、设置 › 翻译与配置页（含获取模型列表、测试）、联网说明（2026-11-18，已在重签安装的真机上试过）
 - [x] 第 3 步：改为用户自管理端点（Endpoint）架构，支持添加/编辑/删除任意多个端点，可选 OpenAI 兼容 / Claude / Gemini / DeepL 四种接口格式与自定义地址（含本地无鉴权服务、实时请求地址预览与旧配置自动迁移）（2026-11-19）
+- [x] 第 4 步：大模型端点拆为独立的 AI 层（`Readling/AI/`，见 `docs/ai-design.md`），翻译层只选用端点并自带提示词；DeepL 改为与 Apple 并列的内置翻译服务；不迁移旧的端点配置（未发布）（2026-11-20）
 - [ ] 以后：查到时的语境释义、本机大模型、目标语言

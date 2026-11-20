@@ -1,7 +1,8 @@
 import Foundation
 
-/// Any endpoint speaking DeepL's `/v2/translate` JSON API: official DeepL Free
-/// (`:fx` keys) / Pro, a relay, or a self-hosted DeepLX server on the LAN.
+/// DeepL's `/v2/translate` JSON API: official DeepL Free (`:fx` keys) / Pro,
+/// a relay, or a self-hosted DeepLX server on the LAN. A translator, not a
+/// language model, so it sits beside Apple's engine rather than among AI endpoints.
 struct DeepLEngine: TranslationEngine {
     struct Configuration: Equatable, Sendable {
         var baseURL: URL
@@ -12,7 +13,7 @@ struct DeepLEngine: TranslationEngine {
     static let freeBaseURL = URL(string: "https://api-free.deepl.com/v2")!
     static let proBaseURL = URL(string: "https://api.deepl.com/v2")!
 
-    var title = TranslationAPIFormat.deepL.title
+    let title = TranslationProviderID.deepLTitle
     let capabilities: Set<TranslationCapability> = [.translate]
     var configuration: Configuration?
     var session: URLSession = .shared
@@ -29,7 +30,7 @@ struct DeepLEngine: TranslationEngine {
     /// Official DeepL hosts automatically pick free vs pro from the `:fx` key
     /// suffix; custom endpoints keep their own host (adding `/v2` when bare).
     static func baseURL(_ address: String, key: String? = nil) -> URL? {
-        guard let url = OnlineTranslation.cleanBaseURL(address, strippingSuffixes: ["/translate"]) else { return nil }
+        guard let url = OnlineService.cleanBaseURL(address, strippingSuffixes: ["/translate"]) else { return nil }
         if let host = url.host(), isOfficialHost(host) {
             return baseURL(forKey: key ?? "")
         }
@@ -41,12 +42,12 @@ struct DeepLEngine: TranslationEngine {
         baseURL(address, key: key)?.appending(path: "translate")
     }
 
-    static func configuration(endpoint: TranslationEndpoint, key: String?) -> Configuration? {
-        let trimmedKey = key?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nonEmptyKey = trimmedKey?.isEmpty == true ? nil : trimmedKey
-        guard let base = baseURL(endpoint.baseURL, key: nonEmptyKey) else { return nil }
-        if let host = base.host(), isOfficialHost(host), nonEmptyKey == nil { return nil }
-        return Configuration(baseURL: base, key: nonEmptyKey)
+    /// Nil without a usable address, or on an official host without a key.
+    static func configuration(address: String, key: String?) -> Configuration? {
+        let key = OnlineService.nonEmptyKey(key)
+        guard let base = baseURL(address, key: key) else { return nil }
+        if let host = base.host(), isOfficialHost(host), key == nil { return nil }
+        return Configuration(baseURL: base, key: key)
     }
 
     static func translateRequest(_ translation: TranslationRequest, _ configuration: Configuration) throws -> URLRequest {
@@ -86,15 +87,15 @@ struct DeepLEngine: TranslationEngine {
                     var translations: [Item]
                 }
                 do {
-                    guard let configuration else { throw TranslationFailure.notConfigured }
-                    let data = try await OnlineTranslation.receive(Self.translateRequest(request, configuration), session: session)
+                    guard let configuration else { throw OnlineFailure.notConfigured }
+                    let data = try await OnlineService.receive(Self.translateRequest(request, configuration), session: session)
                     guard let response = try? JSONDecoder().decode(Response.self, from: data) else {
-                        throw TranslationFailure.failed(String(localized: "看不懂服务返回的译文。"))
+                        throw OnlineFailure.failed(String(localized: "看不懂服务返回的译文。"))
                     }
                     continuation.yield(response.translations.map(\.text).joined(separator: "\n"))
                     continuation.finish()
                 } catch {
-                    continuation.finish(throwing: Task.isCancelled ? CancellationError() : OnlineTranslation.failure(error))
+                    continuation.finish(throwing: Task.isCancelled ? CancellationError() : OnlineService.failure(error))
                 }
             }
             continuation.onTermination = { _ in task.cancel() }

@@ -1,13 +1,16 @@
 import Foundation
 import Security
 
-/// API keys for user-configured translation endpoints, one generic password per
-/// endpoint UUID. Kept on this device only: not synced through iCloud Keychain,
-/// not included in backups.
-struct TranslationKeychain: Sendable {
+/// API keys for user-configured online services, one generic password per
+/// account under a service name. Kept on this device only: not synced through
+/// iCloud Keychain, not included in backups.
+struct APIKeychain: Sendable {
     var service: String
 
-    static let shared = TranslationKeychain(service: "com.inp146.readling.translation")
+    /// Keys of AI endpoints, one account per endpoint UUID.
+    static let ai = APIKeychain(service: "com.inp146.readling.ai")
+    /// Keys of translation-only services such as DeepL, one account per service.
+    static let translation = APIKeychain(service: "com.inp146.readling.translation")
 
     private func query(_ account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
@@ -40,9 +43,24 @@ struct TranslationKeychain: Sendable {
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError(status: status) }
     }
 
-    func key(for endpointID: UUID) -> String? { key(account: endpointID.uuidString) }
-    func setKey(_ key: String, for endpointID: UUID) throws { try setKey(key, account: endpointID.uuidString) }
-    func deleteKey(for endpointID: UUID) throws { try deleteKey(account: endpointID.uuidString) }
+    /// Applies an edit from a settings form: keep, replace (an empty value deletes), or delete.
+    func apply(_ change: KeyChange, account: String) throws {
+        switch change {
+        case .unchanged: break
+        case .set(let value):
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { try deleteKey(account: account) } else { try setKey(trimmed, account: account) }
+        case .clear:
+            try deleteKey(account: account)
+        }
+    }
+}
+
+/// What a settings form did to a saved key.
+enum KeyChange: Equatable, Sendable {
+    case unchanged
+    case set(String)
+    case clear
 }
 
 struct KeychainError: LocalizedError {

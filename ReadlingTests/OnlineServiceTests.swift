@@ -86,8 +86,8 @@ struct ServerSentEventsTests {
 }
 
 @Suite("OpenAI-compatible format")
-struct OpenAICompatibleEngineTests {
-    private func configuration(_ host: String, key: String? = "sk-test1234") -> OpenAICompatibleEngine.Configuration {
+struct OpenAIClientTests {
+    private func configuration(_ host: String, key: String? = "sk-test1234") -> OpenAIClient.Configuration {
         .init(baseURL: URL(string: "https://\(host)/v1")!, key: key, model: "some-model")
     }
 
@@ -100,25 +100,25 @@ struct OpenAICompatibleEngineTests {
         return Data(text.utf8)
     }
 
-    private func run(_ engine: OpenAICompatibleEngine, _ request: TranslationRequest = .translate("Hello there.")) async throws -> [String] {
+    private func run(_ client: OpenAIClient, _ prompt: AIPrompt = .init(system: "sys", user: "Hello there.")) async throws -> [String] {
         var all: [String] = []
-        for try await text in engine.run(request) { all.append(text) }
+        for try await text in client.complete(prompt) { all.append(text) }
         return all
     }
 
     @Test func normalizesEndpointAddresses() {
-        #expect(OpenAICompatibleEngine.endpointURL("https://api.openai.com/v1")?.absoluteString == "https://api.openai.com/v1/chat/completions")
-        #expect(OpenAICompatibleEngine.endpointURL("http://192.168.1.5:11434")?.absoluteString == "http://192.168.1.5:11434/v1/chat/completions")
-        #expect(OpenAICompatibleEngine.endpointURL("https://relay.example.com/v1/chat/completions/")?.absoluteString == "https://relay.example.com/v1/chat/completions")
-        #expect(OpenAICompatibleEngine.endpointURL("https://ark.example.com/api/v3")?.absoluteString == "https://ark.example.com/api/v3/chat/completions")
-        #expect(OpenAICompatibleEngine.endpointURL("api.example.com/v1") == nil)
+        #expect(OpenAIClient.endpointURL("https://api.openai.com/v1")?.absoluteString == "https://api.openai.com/v1/chat/completions")
+        #expect(OpenAIClient.endpointURL("http://192.168.1.5:11434")?.absoluteString == "http://192.168.1.5:11434/v1/chat/completions")
+        #expect(OpenAIClient.endpointURL("https://relay.example.com/v1/chat/completions/")?.absoluteString == "https://relay.example.com/v1/chat/completions")
+        #expect(OpenAIClient.endpointURL("https://ark.example.com/api/v3")?.absoluteString == "https://ark.example.com/api/v3/chat/completions")
+        #expect(OpenAIClient.endpointURL("api.example.com/v1") == nil)
     }
 
     @Test func buildsAStreamingChatRequest() async throws {
         let host = "build.test"
         let session = StubURLProtocol.session(host: host, reply: .init(body: sse(["好"])))
-        _ = try await run(OpenAICompatibleEngine(configuration: configuration(host), session: session),
-                          .explain(word: "hare", sentence: "The March Hare said."))
+        _ = try await run(OpenAIClient(configuration: configuration(host), session: session),
+                          .init(system: "Be brief.", user: "<word>hare</word>"))
         let (request, body) = try #require(StubURLProtocol.request(host: host))
         #expect(request.url?.absoluteString == "https://\(host)/v1/chat/completions")
         #expect(request.httpMethod == "POST")
@@ -127,14 +127,13 @@ struct OpenAICompatibleEngineTests {
         #expect(json["model"] as? String == "some-model")
         #expect(json["stream"] as? Bool == true)
         let messages = try #require(json["messages"] as? [[String: String]])
-        #expect(messages.map { $0["role"] } == ["system", "user"])
-        #expect(messages[1]["content"] == "<word>hare</word>\n<sentence>The March Hare said.</sentence>")
+        #expect(messages == [["role": "system", "content": "Be brief."], ["role": "user", "content": "<word>hare</word>"]])
     }
 
     @Test func sendsNoAuthorizationWithoutAKey() async throws {
         let host = "nokey.test"
         let session = StubURLProtocol.session(host: host, reply: .init(body: sse(["好"])))
-        _ = try await run(OpenAICompatibleEngine(configuration: configuration(host, key: nil), session: session))
+        _ = try await run(OpenAIClient(configuration: configuration(host, key: nil), session: session))
         #expect(StubURLProtocol.request(host: host)?.request.value(forHTTPHeaderField: "Authorization") == nil)
     }
 
@@ -143,13 +142,13 @@ struct OpenAICompatibleEngineTests {
         var body = sse(["你", "好"])
         body.append(Data("data: {\"choices\":[{\"delta\":{\"content\":\"after done\"}}]}\n\n".utf8))
         let session = StubURLProtocol.session(host: host, reply: .init(body: body))
-        #expect(try await run(OpenAICompatibleEngine(configuration: configuration(host), session: session)) == ["你", "你好"])
+        #expect(try await run(OpenAIClient(configuration: configuration(host), session: session)) == ["你", "你好"])
     }
 
     @Test func acceptsAStreamThatEndsWithoutDone() async throws {
         let host = "nodone.test"
         let session = StubURLProtocol.session(host: host, reply: .init(body: sse(["一", "二"], done: false)))
-        #expect(try await run(OpenAICompatibleEngine(configuration: configuration(host), session: session)) == ["一", "一二"])
+        #expect(try await run(OpenAIClient(configuration: configuration(host), session: session)) == ["一", "一二"])
     }
 
     @Test(arguments: [
@@ -161,8 +160,8 @@ struct OpenAICompatibleEngineTests {
         let host = "status\(status).test"
         let body = Data(#"{"error":{"message":"Incorrect API key","type":"invalid_request_error"}}"#.utf8)
         let session = StubURLProtocol.session(host: host, reply: .init(status: status, body: body))
-        await #expect(throws: TranslationFailure.failed(message)) {
-            _ = try await run(OpenAICompatibleEngine(configuration: configuration(host), session: session))
+        await #expect(throws: OnlineFailure.failed(message)) {
+            _ = try await run(OpenAIClient(configuration: configuration(host), session: session))
         }
     }
 
@@ -171,30 +170,32 @@ struct OpenAICompatibleEngineTests {
         var body = sse(["半"], done: false)
         body.append(Data(#"data: {"error":{"message":"overloaded"}}"#.utf8 + Data("\n\n".utf8)))
         let session = StubURLProtocol.session(host: host, reply: .init(body: body))
-        await #expect(throws: TranslationFailure.failed("overloaded")) {
-            _ = try await run(OpenAICompatibleEngine(configuration: configuration(host), session: session))
+        await #expect(throws: OnlineFailure.failed("overloaded")) {
+            _ = try await run(OpenAIClient(configuration: configuration(host), session: session))
         }
     }
 
     @Test func mapsNoConnectionToOffline() async throws {
         let host = "offline.test"
         let session = StubURLProtocol.session(host: host, reply: .init(error: URLError(.notConnectedToInternet)))
-        await #expect(throws: TranslationFailure.offline) {
-            _ = try await run(OpenAICompatibleEngine(configuration: configuration(host), session: session))
+        await #expect(throws: OnlineFailure.offline) {
+            _ = try await run(OpenAIClient(configuration: configuration(host), session: session))
         }
     }
 
-    @Test func refusesToRunWithoutConfiguration() async throws {
-        await #expect(throws: TranslationFailure.notConfigured) {
-            _ = try await run(OpenAICompatibleEngine(configuration: nil))
-        }
+    @Test func needsAnAddressAndAModelButNotAKey() {
+        let endpoint = AIEndpoint(name: "", format: .openAI, baseURL: "http://192.168.1.5:11434", model: "qwen")
+        #expect(OpenAIClient.configuration(endpoint: endpoint, key: "  ")
+                == .init(baseURL: URL(string: "http://192.168.1.5:11434/v1")!, key: nil, model: "qwen"))
+        #expect(AIFormat.openAI.client(for: AIEndpoint(name: "", format: .openAI, baseURL: endpoint.baseURL, model: " "), key: nil) == nil)
+        #expect(AIFormat.claude.client(for: AIEndpoint(name: "", format: .claude, baseURL: "relay.example.com", model: "m"), key: nil) == nil)
     }
 
     @Test func listsModelsSorted() async throws {
         let host = "models.test"
         let body = Data(#"{"object":"list","data":[{"id":"model-b"},{"id":"model-a"}]}"#.utf8)
         let session = StubURLProtocol.session(host: host, reply: .init(body: body))
-        #expect(try await OpenAICompatibleEngine.models(configuration(host), session: session) == ["model-a", "model-b"])
+        #expect(try await OpenAIClient.models(configuration(host), session: session) == ["model-a", "model-b"])
         let (request, _) = try #require(StubURLProtocol.request(host: host))
         #expect(request.url?.absoluteString == "https://\(host)/v1/models")
         #expect(request.httpMethod == "GET")
@@ -202,8 +203,8 @@ struct OpenAICompatibleEngineTests {
 }
 
 @Suite("Claude format")
-struct ClaudeEngineTests {
-    private func configuration(_ host: String, key: String? = "sk-ant-test") -> ClaudeEngine.Configuration {
+struct ClaudeClientTests {
+    private func configuration(_ host: String, key: String? = "sk-ant-test") -> ClaudeClient.Configuration {
         .init(baseURL: URL(string: "https://\(host)/v1")!, key: key, model: "claude-sonnet-test")
     }
 
@@ -221,24 +222,24 @@ struct ClaudeEngineTests {
         return Data(text.utf8)
     }
 
-    private func run(_ engine: ClaudeEngine, _ request: TranslationRequest = .translate("Hello there.")) async throws -> [String] {
+    private func run(_ client: ClaudeClient, _ prompt: AIPrompt = .init(system: "sys", user: "Hello there.")) async throws -> [String] {
         var all: [String] = []
-        for try await text in engine.run(request) { all.append(text) }
+        for try await text in client.complete(prompt) { all.append(text) }
         return all
     }
 
     @Test func normalizesCustomAndOfficialAddresses() {
-        #expect(ClaudeEngine.endpointURL("https://api.anthropic.com")?.absoluteString == "https://api.anthropic.com/v1/messages")
-        #expect(ClaudeEngine.endpointURL("https://api.anthropic.com/v1")?.absoluteString == "https://api.anthropic.com/v1/messages")
-        #expect(ClaudeEngine.endpointURL("https://relay.example.com/anthropic")?.absoluteString == "https://relay.example.com/anthropic/v1/messages")
-        #expect(ClaudeEngine.endpointURL("https://relay.example.com/v1/messages")?.absoluteString == "https://relay.example.com/v1/messages")
+        #expect(ClaudeClient.endpointURL("https://api.anthropic.com")?.absoluteString == "https://api.anthropic.com/v1/messages")
+        #expect(ClaudeClient.endpointURL("https://api.anthropic.com/v1")?.absoluteString == "https://api.anthropic.com/v1/messages")
+        #expect(ClaudeClient.endpointURL("https://relay.example.com/anthropic")?.absoluteString == "https://relay.example.com/anthropic/v1/messages")
+        #expect(ClaudeClient.endpointURL("https://relay.example.com/v1/messages")?.absoluteString == "https://relay.example.com/v1/messages")
     }
 
     @Test func buildsAStreamingMessagesRequest() async throws {
         let host = "claude-build.test"
         let session = StubURLProtocol.session(host: host, reply: .init(body: sse(["好"])))
-        _ = try await run(ClaudeEngine(configuration: configuration(host), session: session),
-                          .explain(word: "hare", sentence: "The March Hare said."))
+        _ = try await run(ClaudeClient(configuration: configuration(host), session: session),
+                          .init(system: "Be brief.", user: "<word>hare</word>", maxTokens: 300))
         let (request, body) = try #require(StubURLProtocol.request(host: host))
         #expect(request.url?.absoluteString == "https://\(host)/v1/messages")
         #expect(request.httpMethod == "POST")
@@ -247,10 +248,10 @@ struct ClaudeEngineTests {
         let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         #expect(json["model"] as? String == "claude-sonnet-test")
         #expect(json["stream"] as? Bool == true)
-        #expect((json["max_tokens"] as? Int ?? 0) > 0)
-        #expect((json["system"] as? String)?.isEmpty == false)
+        #expect(json["max_tokens"] as? Int == 300)
+        #expect(json["system"] as? String == "Be brief.")
         let messages = try #require(json["messages"] as? [[String: String]])
-        #expect(messages == [["role": "user", "content": "<word>hare</word>\n<sentence>The March Hare said.</sentence>"]])
+        #expect(messages == [["role": "user", "content": "<word>hare</word>"]])
     }
 
     @Test func streamsTextDeltasAndStopsAtMessageStop() async throws {
@@ -258,7 +259,7 @@ struct ClaudeEngineTests {
         var body = sse(["你", "好"])
         body.append(Data("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"extra\"}}\n\n".utf8))
         let session = StubURLProtocol.session(host: host, reply: .init(body: body))
-        #expect(try await run(ClaudeEngine(configuration: configuration(host), session: session)) == ["你", "你好"])
+        #expect(try await run(ClaudeClient(configuration: configuration(host), session: session)) == ["你", "你好"])
     }
 
     @Test func reportsMidStreamErrorEvent() async throws {
@@ -266,8 +267,8 @@ struct ClaudeEngineTests {
         var body = sse(["半"], stop: false)
         body.append(Data("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n".utf8))
         let session = StubURLProtocol.session(host: host, reply: .init(body: body))
-        await #expect(throws: TranslationFailure.failed("Overloaded")) {
-            _ = try await run(ClaudeEngine(configuration: configuration(host), session: session))
+        await #expect(throws: OnlineFailure.failed("Overloaded")) {
+            _ = try await run(ClaudeClient(configuration: configuration(host), session: session))
         }
     }
 
@@ -275,7 +276,7 @@ struct ClaudeEngineTests {
         let host = "claude-models.test"
         let body = Data(#"{"data":[{"id":"claude-opus"},{"id":"claude-haiku"}]}"#.utf8)
         let session = StubURLProtocol.session(host: host, reply: .init(body: body))
-        let models = try await ClaudeEngine.models(configuration(host), session: session)
+        let models = try await ClaudeClient.models(configuration(host), session: session)
         #expect(models == ["claude-haiku", "claude-opus"])
         let (request, _) = try #require(StubURLProtocol.request(host: host))
         #expect(request.url?.absoluteString == "https://\(host)/v1/models?limit=100")
@@ -284,8 +285,8 @@ struct ClaudeEngineTests {
 }
 
 @Suite("Gemini format")
-struct GeminiEngineTests {
-    private func configuration(_ host: String, model: String = "gemini-2.5-flash") -> GeminiEngine.Configuration {
+struct GeminiClientTests {
+    private func configuration(_ host: String, model: String = "gemini-2.5-flash") -> GeminiClient.Configuration {
         .init(baseURL: URL(string: "https://\(host)/v1beta")!, key: "gem-key", model: model)
     }
 
@@ -297,16 +298,16 @@ struct GeminiEngineTests {
         return Data(text.utf8)
     }
 
-    private func run(_ engine: GeminiEngine, _ request: TranslationRequest = .translate("Hello there.")) async throws -> [String] {
+    private func run(_ client: GeminiClient, _ prompt: AIPrompt = .init(system: "sys", user: "Hello there.")) async throws -> [String] {
         var all: [String] = []
-        for try await text in engine.run(request) { all.append(text) }
+        for try await text in client.complete(prompt) { all.append(text) }
         return all
     }
 
     @Test func normalizesCustomAndOfficialAddresses() {
-        #expect(GeminiEngine.endpointURL("https://generativelanguage.googleapis.com", model: "gemini-2.5-flash")?.absoluteString
+        #expect(GeminiClient.endpointURL("https://generativelanguage.googleapis.com", model: "gemini-2.5-flash")?.absoluteString
                 == "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
-        #expect(GeminiEngine.endpointURL("https://relay.example.com/v1", model: "models/gemini-2.5-flash")?.absoluteString
+        #expect(GeminiClient.endpointURL("https://relay.example.com/v1", model: "models/gemini-2.5-flash")?.absoluteString
                 == "https://relay.example.com/v1/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
     }
 
@@ -318,7 +319,7 @@ struct GeminiEngineTests {
             [["text": "好"]],
         ])
         let session = StubURLProtocol.session(host: host, reply: .init(body: bodyData))
-        let streamed = try await run(GeminiEngine(configuration: configuration(host, model: "models/gemini-2.5-flash"), session: session))
+        let streamed = try await run(GeminiClient(configuration: configuration(host, model: "models/gemini-2.5-flash"), session: session))
         #expect(streamed == ["你", "你好"])
         let (request, body) = try #require(StubURLProtocol.request(host: host))
         #expect(request.url?.absoluteString == "https://\(host)/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
@@ -326,11 +327,11 @@ struct GeminiEngineTests {
         #expect(request.value(forHTTPHeaderField: "x-goog-api-key") == "gem-key")
         let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         let system = try #require((json["systemInstruction"] as? [String: Any])?["parts"] as? [[String: String]])
-        #expect(system.first?["text"]?.isEmpty == false)
+        #expect(system == [["text": "sys"]])
         let contents = try #require(json["contents"] as? [[String: Any]])
         #expect(contents.first?["role"] as? String == "user")
         let parts = try #require(contents.first?["parts"] as? [[String: String]])
-        #expect(parts == [["text": "<text>\nHello there.\n</text>"]])
+        #expect(parts == [["text": "Hello there."]])
     }
 
     @Test func listsGenerativeModelsWithoutPrefix() async throws {
@@ -343,7 +344,7 @@ struct GeminiEngineTests {
         ]}
         """.utf8)
         let session = StubURLProtocol.session(host: host, reply: .init(body: body))
-        let models = try await GeminiEngine.models(configuration(host), session: session)
+        let models = try await GeminiClient.models(configuration(host), session: session)
         #expect(models == ["gemini-2.5-flash", "gemini-2.5-pro"])
         let (request, _) = try #require(StubURLProtocol.request(host: host))
         #expect(request.url?.absoluteString == "https://\(host)/v1beta/models?pageSize=1000")
@@ -363,8 +364,8 @@ struct DeepLEngineTests {
         #expect(DeepLEngine.endpointURL("https://api.deepl.com/v2", key: "1234-abcd:fx")?.absoluteString == "https://api-free.deepl.com/v2/translate")
         #expect(DeepLEngine.endpointURL("https://api-free.deepl.com/v2", key: "1234-abcd")?.absoluteString == "https://api.deepl.com/v2/translate")
         #expect(DeepLEngine.endpointURL("http://192.168.1.5:1188", key: nil)?.absoluteString == "http://192.168.1.5:1188/v2/translate")
-        #expect(DeepLEngine.configuration(endpoint: .init(name: "", format: .deepL, baseURL: "https://api-free.deepl.com/v2"), key: nil) == nil)
-        #expect(DeepLEngine.configuration(endpoint: .init(name: "DeepLX", format: .deepL, baseURL: "http://192.168.1.5:1188/v2"), key: nil)
+        #expect(DeepLEngine.configuration(address: "https://api-free.deepl.com/v2", key: nil) == nil)
+        #expect(DeepLEngine.configuration(address: "http://192.168.1.5:1188/v2", key: nil)
                 == .init(baseURL: URL(string: "http://192.168.1.5:1188/v2")!, key: nil))
     }
 
@@ -391,7 +392,7 @@ struct DeepLEngineTests {
         let errorBody = Data(#"{"message":"Quota exceeded."}"#.utf8)
         let session = StubURLProtocol.session(host: host, reply: .init(status: 456, body: errorBody))
         let engine = DeepLEngine(configuration: .init(baseURL: URL(string: "http://\(host)/v2")!, key: nil), session: session)
-        await #expect(throws: TranslationFailure.failed("额度用完或请求太频繁，稍后再试。Quota exceeded.")) {
+        await #expect(throws: OnlineFailure.failed("额度用完或请求太频繁，稍后再试。Quota exceeded.")) {
             _ = try await run(engine, .translate("Hello there."))
         }
         let (request, body) = try #require(StubURLProtocol.request(host: host))
@@ -401,20 +402,32 @@ struct DeepLEngineTests {
     }
 }
 
-@Suite("Translation keychain")
-struct TranslationKeychainTests {
-    @Test func savesReplacesAndDeletesEndpointKeysIndependently() throws {
-        let keychain = TranslationKeychain(service: "com.inp146.readling.tests.\(UUID().uuidString)")
-        let first = UUID(), second = UUID()
-        #expect(keychain.key(for: first) == nil)
-        try keychain.setKey("key-1", for: first)
-        try keychain.setKey("key-1b", for: first)
-        try keychain.setKey("key-2", for: second)
-        #expect(keychain.key(for: first) == "key-1b")
-        #expect(keychain.key(for: second) == "key-2")
-        try keychain.deleteKey(for: first)
-        #expect(keychain.key(for: first) == nil)
-        #expect(keychain.key(for: second) == "key-2")
-        try keychain.deleteKey(for: first)
+@Suite("API keychain")
+struct APIKeychainTests {
+    @Test func savesReplacesAndDeletesKeysIndependently() throws {
+        let keychain = APIKeychain(service: "com.inp146.readling.tests.\(UUID().uuidString)")
+        #expect(keychain.key(account: "first") == nil)
+        try keychain.setKey("key-1", account: "first")
+        try keychain.setKey("key-1b", account: "first")
+        try keychain.setKey("key-2", account: "second")
+        #expect(keychain.key(account: "first") == "key-1b")
+        #expect(keychain.key(account: "second") == "key-2")
+        try keychain.deleteKey(account: "first")
+        #expect(keychain.key(account: "first") == nil)
+        #expect(keychain.key(account: "second") == "key-2")
+        try keychain.deleteKey(account: "first")
+    }
+
+    @Test func appliesFormEdits() throws {
+        let keychain = APIKeychain(service: "com.inp146.readling.tests.\(UUID().uuidString)")
+        try keychain.apply(.set("  sk-1  "), account: "a")
+        #expect(keychain.key(account: "a") == "sk-1")
+        try keychain.apply(.unchanged, account: "a")
+        #expect(keychain.key(account: "a") == "sk-1")
+        try keychain.apply(.set(" "), account: "a")
+        #expect(keychain.key(account: "a") == nil)
+        try keychain.apply(.set("sk-2"), account: "a")
+        try keychain.apply(.clear, account: "a")
+        #expect(keychain.key(account: "a") == nil)
     }
 }
