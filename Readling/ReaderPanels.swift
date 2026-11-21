@@ -4,34 +4,65 @@ import UIKit
 
 /// Finer reader settings, pushed inside the settings sheet.
 enum ReaderSettingsPage: Hashable {
-    case fonts, spacing, more
+    case fonts
 }
 
 /// "主题与设置": a half-height sheet over the page, so changes show on the text above it.
+/// The everyday controls fill the half height; spacing and the rest sit below them, shown by pulling the sheet up.
 struct ReaderSettingsSheet: View {
     var isNight: Bool
     @Environment(\.dismiss) private var dismiss
+    @State private var detent = PresentationDetent.medium
 
     var body: some View {
         NavigationStack {
-            ScrollView { ReaderSettingsPanel(isNight: isNight) }
+            GeometryReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ReaderSettingsPanel(isNight: isNight, showsAll: detent == .large)
+                        // Centered in the room left under the controls; the top padding evens out the gap the safe
+                        // area leaves under it, so it sits as far from the controls as from the sheet's edge.
+                        if detent != .large { expandHint.padding(.top, 16).frame(maxHeight: .infinity) }
+                    }
+                    .frame(minHeight: proxy.size.height)
+                }
+            }
                 .navigationTitle("主题与设置").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
                 .navigationDestination(for: ReaderSettingsPage.self) { page in
                     switch page {
                     case .fonts: ReaderFontPicker()
-                    case .spacing: ReaderSpacingSettings()
-                    case .more: ReaderMoreSettings()
                     }
                 }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.medium, .large], selection: $detent)
+    }
+
+    /// At half height, a wide upward chevron under the controls says there is more; tapping it pulls the sheet up too.
+    private var expandHint: some View {
+        Button {
+            withAnimation { detent = .large }
+        } label: {
+            VStack(spacing: 2) {
+                Image(systemName: "chevron.compact.up")
+                    .font(.system(size: 30, weight: .medium))
+                    .imageScale(.large)
+                Text("上滑展开更多设置").font(.caption)
+            }
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("展开更多设置")
     }
 }
 
-/// Brightness, type, color, background, page turning and the doors to finer settings.
+/// Brightness, type, color, background and page turning; below the half-height fold, appearance, screen wake and spacing.
 struct ReaderSettingsPanel: View {
     var isNight: Bool
+    /// The sheet is pulled up: the settings below the fold appear; at half height they stay hidden, not peeking.
+    var showsAll: Bool
 
     @AppStorage("readerFont") private var fontSize = ReaderTypography.defaultSize
     @AppStorage("readerTypeface") private var typeface = ReaderTypeface.newYork
@@ -41,6 +72,10 @@ struct ReaderSettingsPanel: View {
     @AppStorage("readerBackdrop") private var backdrop = ReaderBackdrop.plain
     @AppStorage("readerBackdropVersion") private var backdropVersion = 0
     @AppStorage("readerPageTurn") private var pageTurn = PageTurn.scroll
+    @AppStorage("readerLineSpacing") private var lineSpacing = ReaderLayout.defaultLineSpacing
+    @AppStorage("readerParagraphSpacing") private var paragraphSpacing = ReaderLayout.defaultParagraphSpacing
+    @AppStorage("readerMargin") private var margin = ReaderLayout.defaultMargin
+    @AppStorage("readerKeepAwake") private var keepAwake = false
     @State private var brightness = ScreenBrightness.current
     @State private var choosingPhoto = false
     @State private var photo: PhotosPickerItem?
@@ -102,17 +137,40 @@ struct ReaderSettingsPanel: View {
                                  selection: $pageTurn, height: ReaderPanelMetrics.controlHeight)
                     .accessibilityLabel("翻页")
             }
-            row("其他") {
-                NavigationLink(value: ReaderSettingsPage.spacing) { Text("间距设置").pill() }
-                    .glassPill()
-                NavigationLink(value: ReaderSettingsPage.more) {
-                    HStack(spacing: 4) {
-                        Text("更多")
-                        Image(systemName: "chevron.right").font(.caption)
-                    }
-                    .pill()
+
+            if showsAll {
+                Divider().padding(.vertical, 6)
+
+                row("外观") {
+                    SegmentedControl(items: [(String(localized: "跟随系统"), "system"),
+                                             (String(localized: "日间"), "light"),
+                                             (String(localized: "夜间"), "dark")],
+                                     selection: $appearance, height: ReaderPanelMetrics.controlHeight)
+                        .accessibilityLabel("外观")
                 }
-                .glassPill()
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("阅读时屏幕常亮", isOn: $keepAwake)
+                    Text("自动阅读时屏幕总是保持常亮。").font(.footnote).foregroundStyle(.secondary)
+                }
+
+                Divider().padding(.vertical, 6)
+
+                HStack {
+                    Text("间距").foregroundStyle(.secondary)
+                    Spacer()
+                    Button("恢复默认") {
+                        lineSpacing = ReaderLayout.defaultLineSpacing
+                        paragraphSpacing = ReaderLayout.defaultParagraphSpacing
+                        margin = ReaderLayout.defaultMargin
+                    }
+                    .glassPill()
+                    .disabled(lineSpacing == ReaderLayout.defaultLineSpacing
+                              && paragraphSpacing == ReaderLayout.defaultParagraphSpacing
+                              && margin == ReaderLayout.defaultMargin)
+                }
+                ReaderSettingSlider(title: "行距", value: $lineSpacing, range: 1.0...2.2, step: 0.05) { String(format: "%.2f", $0) }
+                ReaderSettingSlider(title: "段距", value: $paragraphSpacing, range: 0...1.5, step: 0.05) { String(format: "%.2f", $0) }
+                ReaderSettingSlider(title: "页边距", value: $margin, range: 12...48, step: 2) { "\(Int($0))" }
             }
         }
         .font(.subheadline)
@@ -318,50 +376,6 @@ struct ReaderFontPicker: View {
             .accessibilityAddTraits(item == typeface ? .isSelected : [])
         }
         .navigationTitle("字体").navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-struct ReaderSpacingSettings: View {
-    @AppStorage("readerLineSpacing") private var lineSpacing = ReaderLayout.defaultLineSpacing
-    @AppStorage("readerParagraphSpacing") private var paragraphSpacing = ReaderLayout.defaultParagraphSpacing
-    @AppStorage("readerMargin") private var margin = ReaderLayout.defaultMargin
-
-    var body: some View {
-        Form {
-            ReaderSettingSlider(title: "行距", value: $lineSpacing, range: 1.0...2.2, step: 0.05) { String(format: "%.2f", $0) }
-            ReaderSettingSlider(title: "段距", value: $paragraphSpacing, range: 0...1.5, step: 0.05) { String(format: "%.2f", $0) }
-            ReaderSettingSlider(title: "页边距", value: $margin, range: 12...48, step: 2) { "\(Int($0))" }
-            Button("恢复默认") {
-                lineSpacing = ReaderLayout.defaultLineSpacing
-                paragraphSpacing = ReaderLayout.defaultParagraphSpacing
-                margin = ReaderLayout.defaultMargin
-            }
-        }
-        .navigationTitle("间距设置").navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-struct ReaderMoreSettings: View {
-    @AppStorage("readerAppearance") private var appearance = "system"
-    @AppStorage("readerKeepAwake") private var keepAwake = false
-
-    var body: some View {
-        Form {
-            Section("外观") {
-                Picker("外观", selection: $appearance) {
-                    Text("跟随系统").tag("system")
-                    Text("日间").tag("light")
-                    Text("夜间").tag("dark")
-                }
-                .pickerStyle(.segmented)
-            }
-            Section {
-                Toggle("阅读时屏幕常亮", isOn: $keepAwake)
-            } footer: {
-                Text("自动阅读时屏幕总是保持常亮。")
-            }
-        }
-        .navigationTitle("更多设置").navigationBarTitleDisplayMode(.inline)
     }
 }
 
