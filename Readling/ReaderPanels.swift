@@ -2,14 +2,36 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
-/// The settings that sit above the reader's tab row: brightness, type, color,
-/// background, page turning and the doors to finer settings.
+/// Finer reader settings, pushed inside the settings sheet.
+enum ReaderSettingsPage: Hashable {
+    case fonts, spacing, more
+}
+
+/// "主题与设置": a half-height sheet over the page, so changes show on the text above it.
+struct ReaderSettingsSheet: View {
+    var isNight: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView { ReaderSettingsPanel(isNight: isNight) }
+                .navigationTitle("主题与设置").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
+                .navigationDestination(for: ReaderSettingsPage.self) { page in
+                    switch page {
+                    case .fonts: ReaderFontPicker()
+                    case .spacing: ReaderSpacingSettings()
+                    case .more: ReaderMoreSettings()
+                    }
+                }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
+/// Brightness, type, color, background, page turning and the doors to finer settings.
 struct ReaderSettingsPanel: View {
     var isNight: Bool
-    var onFonts: () -> Void
-    var onSpacing: () -> Void
-    var onMore: () -> Void
-    var onAutoRead: () -> Void
 
     @AppStorage("readerFont") private var fontSize = ReaderTypography.defaultSize
     @AppStorage("readerTypeface") private var typeface = ReaderTypeface.newYork
@@ -19,7 +41,6 @@ struct ReaderSettingsPanel: View {
     @AppStorage("readerBackdrop") private var backdrop = ReaderBackdrop.plain
     @AppStorage("readerBackdropVersion") private var backdropVersion = 0
     @AppStorage("readerPageTurn") private var pageTurn = PageTurn.scroll
-    @AppStorage("readerEyeCare") private var eyeCare = false
     @State private var brightness = ScreenBrightness.current
     @State private var choosingPhoto = false
     @State private var photo: PhotosPickerItem?
@@ -34,34 +55,30 @@ struct ReaderSettingsPanel: View {
                 Slider(value: $brightness, in: 0...1)
                     .onChange(of: brightness) { _, value in ScreenBrightness.set(value) }
                     .accessibilityLabel("亮度")
-                Button { eyeCare.toggle() } label: {
-                    Label("护眼模式", systemImage: eyeCare ? "eye.fill" : "eye")
-                        .labelStyle(TrailingIconLabelStyle())
-                        .foregroundStyle(eyeCare ? Color.accent : .primary)
-                }
-                .accessibilityValue(eyeCare ? "开" : "关")
-                .accessibilityIdentifier("eye-care")
             }
             row("字号") {
                 Button { fontSize = max(ReaderTypography.sizeRange.lowerBound, fontSize - 1) } label: {
                     sizeGlyph("−").pill()
                 }
+                .glassPill()
                 .disabled(fontSize <= ReaderTypography.sizeRange.lowerBound)
                 .accessibilityLabel("字号减小")
                 Text("\(Int(fontSize))").monospacedDigit().frame(minWidth: 28)
                 Button { fontSize = min(ReaderTypography.sizeRange.upperBound, fontSize + 1) } label: {
                     sizeGlyph("+").pill()
                 }
+                .glassPill()
                 .disabled(fontSize >= ReaderTypography.sizeRange.upperBound)
                 .accessibilityLabel("字号增大")
-                Button(action: onFonts) {
+                NavigationLink(value: ReaderSettingsPage.fonts) {
                     HStack(spacing: 4) {
                         Text(typeface.title).lineLimit(1)
                         Image(systemName: "chevron.right").font(.caption)
                     }
-                    .pill(expand: false)
+                    .frame(minHeight: ReaderPanelMetrics.labelHeight)
                     .fixedSize()
                 }
+                .glassPill()
                 .accessibilityIdentifier("choose-font")
             }
             row("颜色") {
@@ -81,43 +98,27 @@ struct ReaderSettingsPanel: View {
                 }
             }
             row("翻页") {
-                HStack(spacing: 0) {
-                    ForEach(PageTurn.allCases) { item in
-                        Button { pageTurn = item } label: {
-                            Text(item.title)
-                                .lineLimit(1).minimumScaleFactor(0.8)
-                                .frame(maxWidth: .infinity, minHeight: 36)
-                                .background(pageTurn == item ? Color.primary.opacity(0.16) : .clear, in: Capsule())
-                                .contentShape(Capsule())
-                        }
-                        .accessibilityAddTraits(pageTurn == item ? .isSelected : [])
-                    }
-                }
-                .padding(3)
-                .background(Color.primary.opacity(0.06), in: Capsule())
+                SegmentedControl(items: PageTurn.allCases.map { (String(localized: $0.title), $0) },
+                                 selection: $pageTurn, height: ReaderPanelMetrics.controlHeight)
+                    .accessibilityLabel("翻页")
             }
             row("其他") {
-                Button(action: onSpacing) { Text("间距设置").pill() }
-                Button(action: onMore) {
+                NavigationLink(value: ReaderSettingsPage.spacing) { Text("间距设置").pill() }
+                    .glassPill()
+                NavigationLink(value: ReaderSettingsPage.more) {
                     HStack(spacing: 4) {
                         Text("更多")
                         Image(systemName: "chevron.right").font(.caption)
                     }
                     .pill()
                 }
+                .glassPill()
             }
-            Button(action: onAutoRead) {
-                Label("开启自动阅读", systemImage: "play.circle")
-                    .labelStyle(TrailingIconLabelStyle())
-                    .frame(maxWidth: .infinity)
-            }
-            .accessibilityIdentifier("auto-read")
         }
         .font(.subheadline)
         .buttonStyle(.plain)
         .padding(.horizontal, 20)
-        .padding(.top, 20)
-        .padding(.bottom, 12)
+        .padding(.vertical, 12)
         .photosPicker(isPresented: $choosingPhoto, selection: $photo, matching: .images)
         .onChange(of: photo) { _, item in
             guard let item else { return }
@@ -142,6 +143,8 @@ struct ReaderSettingsPanel: View {
             Text(verbatim: "A").font(.body)
             Text(verbatim: sign).font(.caption.weight(.semibold)).baselineOffset(7)
         }
+        // Laid out as one line of the row's text, so these buttons stand as tall as the others in the panel.
+        .frame(height: UIFont.preferredFont(forTextStyle: .subheadline).lineHeight)
     }
 
     private func row(_ title: LocalizedStringKey, @ViewBuilder content: () -> some View) -> some View {
@@ -196,37 +199,61 @@ struct ReaderSettingsPanel: View {
     }
 }
 
-private struct TrailingIconLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 6) { configuration.title; configuration.icon }
+/// The system segmented control at a chosen height. SwiftUI's segmented picker only comes in the fixed
+/// control sizes, none of them as tall as the panel's other buttons; UIKit's stretches to its frame.
+struct SegmentedControl<Value: Hashable>: UIViewRepresentable {
+    var items: [(title: String, value: Value)]
+    @Binding var selection: Value
+    var height: CGFloat
+
+    func makeUIView(context: Context) -> UISegmentedControl {
+        let control = UISegmentedControl(items: items.map(\.title))
+        // The panel's text size, which follows Dynamic Type like the rest of it.
+        control.setTitleTextAttributes([.font: UIFont.preferredFont(forTextStyle: .subheadline)], for: .normal)
+        control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        return control
     }
+
+    func updateUIView(_ control: UISegmentedControl, context: Context) {
+        context.coordinator.parent = self
+        control.selectedSegmentIndex = items.firstIndex { $0.value == selection } ?? UISegmentedControl.noSegment
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISegmentedControl, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width, height: height)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    final class Coordinator: NSObject {
+        var parent: SegmentedControl
+
+        init(parent: SegmentedControl) { self.parent = parent }
+
+        @objc func changed(_ control: UISegmentedControl) {
+            guard parent.items.indices.contains(control.selectedSegmentIndex) else { return }
+            parent.selection = parent.items[control.selectedSegmentIndex].value
+        }
+    }
+}
+
+enum ReaderPanelMetrics {
+    /// Every capsule control in the settings panel stands this tall.
+    static let controlHeight: CGFloat = 36
+    /// The label inside a system glass button that makes the button `controlHeight` tall.
+    static let labelHeight: CGFloat = controlHeight - 14
 }
 
 private extension View {
+    /// A label spread across its share of the row; the control around it is a system glass button.
     func pill(expand: Bool = true) -> some View {
-        frame(maxWidth: expand ? .infinity : nil, minHeight: 36)
-            .padding(.horizontal, expand ? 0 : 14)
-            .background(Color.primary.opacity(0.06), in: Capsule())
-            .contentShape(Capsule())
+        frame(maxWidth: expand ? .infinity : nil, minHeight: ReaderPanelMetrics.labelHeight)
     }
-}
 
-/// One item of the reader's bottom tab row.
-struct ReaderTabButton: View {
-    var title: LocalizedStringKey
-    var systemImage: String
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: systemImage).font(.title3).frame(height: 26)
-                Text(title).font(.caption)
-            }
-            .frame(maxWidth: .infinity, minHeight: 52)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+    /// The system's glass capsule, so these share their height with the segmented control beside them.
+    func glassPill() -> some View {
+        // Plain ink like the rest of the panel, not the app's accent.
+        buttonStyle(.glass).buttonBorderShape(.capsule).tint(.primary)
     }
 }
 
@@ -272,30 +299,25 @@ enum ScreenBrightness {
 
 struct ReaderFontPicker: View {
     @AppStorage("readerTypeface") private var typeface = ReaderTypeface.newYork
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            List(ReaderTypeface.allCases) { item in
-                Button { typeface = item } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.title).font(.subheadline).foregroundStyle(.secondary)
-                            Text(verbatim: "The pleasure of reading begins with a single page.")
-                                .font(Font(ReaderTypography.font(item, size: 18) as CTFont))
-                                .foregroundStyle(.primary)
-                        }
-                        Spacer()
-                        if item == typeface { Image(systemName: "checkmark").foregroundStyle(Color.accent) }
+        List(ReaderTypeface.allCases) { item in
+            Button { typeface = item } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.title).font(.subheadline).foregroundStyle(.secondary)
+                        Text(verbatim: "The pleasure of reading begins with a single page.")
+                            .font(Font(ReaderTypography.font(item, size: 18) as CTFont))
+                            .foregroundStyle(.primary)
                     }
-                    .padding(.vertical, 4)
+                    Spacer()
+                    if item == typeface { Image(systemName: "checkmark").foregroundStyle(Color.accent) }
                 }
-                .accessibilityAddTraits(item == typeface ? .isSelected : [])
+                .padding(.vertical, 4)
             }
-            .navigationTitle("字体").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
+            .accessibilityAddTraits(item == typeface ? .isSelected : [])
         }
-        .presentationDetents([.medium, .large])
+        .navigationTitle("字体").navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -303,54 +325,43 @@ struct ReaderSpacingSettings: View {
     @AppStorage("readerLineSpacing") private var lineSpacing = ReaderLayout.defaultLineSpacing
     @AppStorage("readerParagraphSpacing") private var paragraphSpacing = ReaderLayout.defaultParagraphSpacing
     @AppStorage("readerMargin") private var margin = ReaderLayout.defaultMargin
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            Form {
-                ReaderSettingSlider(title: "行距", value: $lineSpacing, range: 1.0...2.2, step: 0.05) { String(format: "%.2f", $0) }
-                ReaderSettingSlider(title: "段距", value: $paragraphSpacing, range: 0...1.5, step: 0.05) { String(format: "%.2f", $0) }
-                ReaderSettingSlider(title: "页边距", value: $margin, range: 12...48, step: 2) { "\(Int($0))" }
-                Button("恢复默认") {
-                    lineSpacing = ReaderLayout.defaultLineSpacing
-                    paragraphSpacing = ReaderLayout.defaultParagraphSpacing
-                    margin = ReaderLayout.defaultMargin
-                }
+        Form {
+            ReaderSettingSlider(title: "行距", value: $lineSpacing, range: 1.0...2.2, step: 0.05) { String(format: "%.2f", $0) }
+            ReaderSettingSlider(title: "段距", value: $paragraphSpacing, range: 0...1.5, step: 0.05) { String(format: "%.2f", $0) }
+            ReaderSettingSlider(title: "页边距", value: $margin, range: 12...48, step: 2) { "\(Int($0))" }
+            Button("恢复默认") {
+                lineSpacing = ReaderLayout.defaultLineSpacing
+                paragraphSpacing = ReaderLayout.defaultParagraphSpacing
+                margin = ReaderLayout.defaultMargin
             }
-            .navigationTitle("间距设置").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
         }
-        .presentationDetents([.height(380), .medium])
-        .presentationBackgroundInteraction(.enabled(upThrough: .height(380)))
+        .navigationTitle("间距设置").navigationBarTitleDisplayMode(.inline)
     }
 }
 
 struct ReaderMoreSettings: View {
     @AppStorage("readerAppearance") private var appearance = "system"
     @AppStorage("readerKeepAwake") private var keepAwake = false
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section("外观") {
-                    Picker("外观", selection: $appearance) {
-                        Text("跟随系统").tag("system")
-                        Text("日间").tag("light")
-                        Text("夜间").tag("dark")
-                    }
-                    .pickerStyle(.segmented)
+        Form {
+            Section("外观") {
+                Picker("外观", selection: $appearance) {
+                    Text("跟随系统").tag("system")
+                    Text("日间").tag("light")
+                    Text("夜间").tag("dark")
                 }
-                Section {
-                    Toggle("阅读时屏幕常亮", isOn: $keepAwake)
-                } footer: {
-                    Text("自动阅读时屏幕总是保持常亮。")
-                }
+                .pickerStyle(.segmented)
             }
-            .navigationTitle("更多设置").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
+            Section {
+                Toggle("阅读时屏幕常亮", isOn: $keepAwake)
+            } footer: {
+                Text("自动阅读时屏幕总是保持常亮。")
+            }
         }
-        .presentationDetents([.medium, .large])
+        .navigationTitle("更多设置").navigationBarTitleDisplayMode(.inline)
     }
 }
 

@@ -39,9 +39,14 @@ struct ReaderView: View {
     /// Where the lookup bubble may go, in global coordinates: inside the safe area and above the bottom bars.
     @State private var lookupArea: CGRect = .zero
     @State private var chromeVisible = true
-    @State private var bottomSafeArea: CGFloat = 0
-    @State private var showPanel = false
-    @State private var sliderChapter: Double?
+    /// The floating menu button unfolded into its list of actions.
+    @State private var menuOpen = false
+    @Namespace private var glassSpace
+    /// Where a drag along the progress row has got to, through the whole book; nil when not dragging.
+    @State private var scrubFraction: Double?
+    @State private var scrubStart = 0.0
+    /// Each chapter's length in UTF-16 units, so progress through the book weighs chapters by their text.
+    @State private var chapterLengths: [Int] = []
     @State private var autoReading = false
     @State private var sheet: ReaderSheet?
     @State private var toast: String?
@@ -50,7 +55,7 @@ struct ReaderView: View {
     @State private var marks: [NSRange] = []
 
     private enum ReaderSheet: String, Identifiable {
-        case contents, search, fonts, spacing, more
+        case contents, search, settings
         var id: String { rawValue }
     }
 
@@ -65,7 +70,6 @@ struct ReaderView: View {
     private var colorScheme: ColorScheme? { appearance == "light" ? .light : appearance == "dark" ? .dark : nil }
     private var isNight: Bool { appearance == "dark" || (appearance != "light" && systemScheme == .dark) }
     private var palette: ReaderPalette { ReaderPalette(day: dayTheme, night: nightTheme) }
-    private var chrome: Color { Color(uiColor: palette.chrome) }
     private var layout: ReaderLayout {
         ReaderLayout(fontSize: fontSize, typeface: typeface, lineSpacing: lineSpacing, paragraphSpacing: paragraphSpacing, margin: margin)
     }
@@ -86,7 +90,6 @@ struct ReaderView: View {
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { lookupArea = $0 }
                     .overlay { lookupOverlay }
                     .safeAreaInset(edge: .bottom, spacing: 0) { bottomInset }
-                    .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { bottomSafeArea = $0 }
                     .overlay(alignment: .top) { topBar }
                     .overlay(alignment: .top) {
                         if let toast { ToastLabel(text: toast).padding(.top, 8) }
@@ -124,21 +127,25 @@ struct ReaderView: View {
             UIApplication.shared.isIdleTimerDisabled = false
             ScreenBrightness.reset()
         }
-        .sheet(item: $sheet) { item in
-            switch item {
-            case .contents: contents
-            case .search: BookSearchView(chapters: content?.chapters ?? []) { visit(chapter: $0, offset: $1) }
-            case .fonts: ReaderFontPicker()
-            case .spacing: ReaderSpacingSettings()
-            case .more: ReaderMoreSettings()
-            }
-        }
+        .sheet(item: $sheet) { sheetContent($0) }
         .alert("没有保存成功", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("好", role: .cancel) { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
     }
 
     // MARK: Pieces
+
+    /// Sheets don't follow the reader's own day/night choice by themselves.
+    private func sheetContent(_ item: ReaderSheet) -> some View {
+        Group {
+            switch item {
+            case .contents: contents
+            case .search: BookSearchView(chapters: content?.chapters ?? []) { visit(chapter: $0, offset: $1) }
+            case .settings: ReaderSettingsSheet(isNight: isNight)
+            }
+        }
+        .preferredColorScheme(colorScheme)
+    }
 
     private var readingArea: some View {
         ZStack {
@@ -203,22 +210,18 @@ struct ReaderView: View {
         }
     }
 
+    /// Just the way back to the shelf, floating in the corner above the menu button.
     private var topBar: some View {
-        HStack(spacing: 12) {
-            Button { close() } label: {
-                Image(systemName: "chevron.left").font(.title3.weight(.semibold)).frame(width: 44, height: 44)
-            }
-            .glassEffect(.regular.interactive(), in: .circle)
-            .accessibilityLabel("书架")
-            .accessibilityIdentifier("close-reader")
-            Text(current?.title ?? book?.title ?? "")
-                .font(.headline).lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityAddTraits(.isHeader)
+        Button { close() } label: {
+            Image(systemName: "xmark").font(.title3.weight(.semibold)).frame(width: 48, height: 48).contentShape(.circle)
         }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .accessibilityLabel("书架")
+        .accessibilityIdentifier("close-reader")
+        .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.horizontal, 16)
-        .padding(.vertical, 6)
-        .background(chrome.ignoresSafeArea(edges: .top))
+        .padding(.top, 4)
         // Always in place and only slid away: inserting it anew sometimes animated from a stale frame.
         .visualEffect { [chromeVisible] content, proxy in
             content.offset(y: chromeVisible ? 0 : -proxy.frame(in: .global).maxY)
@@ -231,9 +234,14 @@ struct ReaderView: View {
     private var bottomInset: some View {
         VStack(spacing: 0) {
             if !tipSeen && content != nil && lookup == nil { tip.padding(.bottom, 8) }
-            if savedPlace != nil { returnBar }
+            if savedPlace != nil { returnBar.padding(.bottom, 10) }
             if chromeVisible {
-                bottomBar
+                Group {
+                    if autoReading { autoReadingBar } else { menu }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if fraction >= 0.99 && hasNext && !pageTurn.isPaged && !autoReading {
                 nextChapterButton.padding(.bottom, 8)
             }
@@ -267,126 +275,250 @@ struct ReaderView: View {
         }
     }
 
-    private var bottomBar: some View {
-        VStack(spacing: 0) {
-            // The panel unfolds from the tabs' top edge, sliding over the chapter bar, which stays put underneath.
-            ZStack(alignment: .bottom) {
-                Group {
-                    if autoReading { autoReadingBar } else { chapterBar }
-                }
-                .background(chrome)
-                .allowsHitTesting(!showPanel)
-                .accessibilityHidden(showPanel)
-                if showPanel {
-                    VStack(spacing: 0) {
-                        ReaderSettingsPanel(isNight: isNight,
-                                            onFonts: { sheet = .fonts },
-                                            onSpacing: { sheet = .spacing },
-                                            onMore: { sheet = .more },
-                                            onAutoRead: startAutoReading)
-                        Divider()
-                    }
-                    .background(chrome)
-                    .transition(.move(edge: .bottom))
-                    // A view being removed from a ZStack loses its implicit order; pin it above the chapter bar.
-                    .zIndex(1)
-                }
-            }
-            .clipped()
-            HStack(spacing: 0) {
-                ReaderTabButton(title: "目录", systemImage: "list.bullet.rectangle.portrait") { sheet = .contents }
-                    .accessibilityIdentifier("open-chapters")
-                ReaderTabButton(title: isNight ? "日间" : "夜间", systemImage: isNight ? "sun.max" : "moon") {
-                    appearance = isNight ? "light" : "dark"
-                }
-                .accessibilityIdentifier("toggle-night")
-                ReaderTabButton(title: "设置", systemImage: showPanel ? "gearshape.fill" : "gearshape") {
-                    withAnimation(.easeInOut(duration: 0.28)) { showPanel.toggle() }
-                }
-                .accessibilityAddTraits(showPanel ? .isSelected : [])
-                .accessibilityIdentifier("reading-settings")
-                ReaderTabButton(title: "搜索", systemImage: "magnifyingglass") { sheet = .search }
-                    .accessibilityIdentifier("search-book")
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            // Sinks a quarter of the blank under the tabs into the home indicator area.
-            .padding(.bottom, -(bottomSafeArea + 6) / 4)
-            .background(chrome.ignoresSafeArea(edges: .bottom))
-        }
-        .transition(.move(edge: .bottom).combined(with: .opacity))
+    /// Where a place in a chapter falls through the whole book, from 0 to 1.
+    private func bookFraction(chapter index: Int, fraction value: Double) -> Double {
+        let total = chapterLengths.reduce(0, +)
+        guard total > 0, chapterLengths.indices.contains(index) else { return 0 }
+        let before = chapterLengths[..<index].reduce(0, +)
+        return (Double(before) + min(max(value, 0), 1) * Double(chapterLengths[index])) / Double(total)
     }
 
-    private var chapterBar: some View {
-        let last = max(chapterCount - 1, 0)
-        let shown = min(Int(sliderChapter ?? Double(chapter)), last)
-        let preview: String? = if sliderChapter != nil, let chapters = content?.chapters, chapters.indices.contains(shown) {
-            "\(chapters[shown].title) · \(shown + 1)/\(chapterCount)"
-        } else { nil }
-        return VStack(spacing: 6) {
-            // Paged reading shows progress in each page's footer; the bar only previews a slider drag.
-            if !pageTurn.isPaged {
-                Text(preview ?? "第 \(chapter + 1)/\(max(chapterCount, 1)) 章 · 本章 \(Int(fraction * 100))%")
-                    .font(.caption2).monospacedDigit().foregroundStyle(.secondary).lineLimit(1)
+    /// The chapter, and how far into it, at a fraction of the whole book.
+    private func place(atBookFraction value: Double) -> (chapter: Int, fraction: Double) {
+        let total = chapterLengths.reduce(0, +)
+        guard total > 0 else { return (0, 0) }
+        var remaining = min(max(value, 0), 1) * Double(total)
+        for (index, length) in chapterLengths.enumerated() {
+            if remaining < Double(length) || index == chapterLengths.count - 1 {
+                return (index, length > 0 ? min(remaining / Double(length), 1) : 0)
             }
-            HStack(spacing: 14) {
-                Button("上一章") { go(to: chapter - 1) }
-                    .disabled(chapter == 0)
-                Slider(value: Binding(get: { sliderChapter ?? Double(chapter) }, set: { sliderChapter = $0.rounded() }),
-                       in: 0...Double(max(last, 1)), step: 1) { editing in
-                    if !editing, let target = sliderChapter {
-                        sliderChapter = nil
-                        go(to: Int(target))
+            remaining -= Double(length)
+        }
+        return (0, 0)
+    }
+
+    private var bookProgress: Double { bookFraction(chapter: chapter, fraction: fraction) }
+
+    /// One glass button in the corner; it unfolds into the reader's actions and folds back into itself.
+    private var menu: some View {
+        GlassEffectContainer(spacing: 10) {
+            VStack(alignment: .trailing, spacing: 10) {
+                if menuOpen {
+                    progressRow
+                    // Dragging the progress row leaves it alone on the page, still where the finger found it.
+                    if scrubFraction != nil {
+                        Color.clear.frame(width: Self.menuWidth, height: Self.menuRowHeight * 3 + 10 * 2)
+                    } else {
+                    menuRow("书内搜索", systemImage: "magnifyingglass", id: "search-book") { present(.search) }
+                    menuRow("主题与设置", systemImage: "paintpalette", id: "reading-settings") { present(.settings) }
+                    HStack(spacing: 10) {
+                        menuIcon(isNight ? "日间" : "夜间", systemImage: isNight ? "sun.max" : "moon", id: "toggle-night") {
+                            appearance = isNight ? "light" : "dark"
+                        }
+                        menuIcon("护眼模式", systemImage: eyeCare ? "eye.fill" : "eye", id: "eye-care") { eyeCare.toggle() }
+                            .accessibilityValue(eyeCare ? "开" : "关")
+                        menuIcon("自动阅读", systemImage: "play", id: "auto-read") { startAutoReading() }
+                        menuIcon("收起", systemImage: "xmark", id: "close-menu") { setMenu(open: false) }
                     }
+                    }
+                } else {
+                    Button { setMenu(open: true) } label: {
+                        Image(systemName: "line.3.horizontal").font(.title3.weight(.semibold)).frame(width: 48, height: 48).contentShape(.circle)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .circle)
+                    .glassEffectID("menu", in: glassSpace)
+                    .accessibilityLabel("菜单")
+                    .accessibilityIdentifier("reader-menu")
                 }
-                .disabled(last == 0)
-                .accessibilityLabel("章节")
-                .accessibilityValue("第 \(shown + 1) 章，共 \(chapterCount) 章")
-                Button("下一章") { go(to: chapter + 1) }
-                    .disabled(!hasNext)
-                    .accessibilityIdentifier("next-chapter-bar")
-            }
-            .font(.subheadline)
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .padding(.bottom, 4)
-        .overlay(alignment: .top) {
-            if pageTurn.isPaged, let preview {
-                Text(preview)
-                    .font(.subheadline.weight(.medium)).monospacedDigit().lineLimit(1)
-                    .padding(.horizontal, 16).padding(.vertical, 10)
-                    .background(.regularMaterial, in: Capsule())
-                    .alignmentGuide(.top) { $0[.bottom] + 8 }
-                    .padding(.horizontal, 20)
             }
         }
+        // Outside the glass container, which would otherwise draw the bubble into the bar's glass.
+        .overlay(alignment: .topLeading) {
+            if let scrubFraction { scrubBubble(at: scrubFraction, width: Self.progressWidth) }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private func menuRow(_ title: String, systemImage: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title).monospacedDigit().lineLimit(1)
+                Spacer(minLength: 16)
+                Image(systemName: systemImage).font(.title3)
+            }
+            .font(.body.weight(.medium))
+            .padding(.horizontal, 22)
+            .frame(width: Self.menuWidth, height: Self.menuRowHeight)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .capsule)
+        .glassEffectID(id, in: glassSpace)
+        .accessibilityIdentifier(id)
+    }
+
+    private func menuIcon(_ title: LocalizedStringKey, systemImage: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage).font(.title3).frame(width: (Self.menuWidth - 10 * 3) / 4, height: Self.menuRowHeight).contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .capsule)
+        .glassEffectID(id, in: glassSpace)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(id)
+    }
+
+    private func setMenu(open: Bool) {
+        withAnimation(.bouncy(duration: 0.35)) { menuOpen = open }
+    }
+
+    /// The menu folds away behind a sheet; the buttons stay up for the next step.
+    private func present(_ item: ReaderSheet) {
+        sheet = item
+        setMenu(open: false)
+    }
+
+    /// The first menu row is the book's progress: a tap opens the contents, a sideways drag turns it
+    /// into a bar to skim through the whole book, landing where the finger lets go.
+    /// The unfolded menu: rows this wide and tall; the four round buttons share the bottom row.
+    private static let menuWidth: CGFloat = 260
+    private static let menuRowHeight: CGFloat = 50
+    private static var progressWidth: CGFloat { menuWidth }
+
+    /// The row's look: the part read so far always under the label, so it shows progress at a glance.
+    private var progressBar: some View {
+        let width = Self.progressWidth
+        let shown = CGFloat(scrubFraction ?? bookProgress)
+        let fill = Color.primary.opacity(scrubFraction == nil ? 0.1 : 0.18)
+        return ZStack(alignment: .leading) {
+            Rectangle().fill(fill).frame(width: width * shown)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            if scrubFraction == nil { progressLabel(Int(shown * 100)) }
+        }
+        .frame(width: width, height: Self.menuRowHeight)
+        .clipShape(Capsule())
+        .contentShape(Capsule())
+        // Not interactive glass: its press squeezes the glass but not the progress drawn on it.
+        .glassEffect(.regular, in: .capsule)
+        .glassEffectID("open-chapters", in: glassSpace)
+    }
+
+    private func progressLabel(_ percent: Int) -> some View {
+        HStack {
+            Text("目录 · \(percent)%").monospacedDigit().lineLimit(1)
+            Spacer(minLength: 16)
+            Image(systemName: "list.bullet").font(.title3)
+        }
+        .font(.body.weight(.medium))
+        .padding(.horizontal, 22)
+    }
+
+    private var progressRow: some View {
+        progressBar
+            // A tick on picking the bar up and at each chapter crossed; a firmer knock at either end of the book.
+            .sensoryFeedback(trigger: scrubChapter, Self.chapterFeedback)
+            .sensoryFeedback(trigger: scrubAtEnd, Self.endFeedback)
+            .onTapGesture { present(.contents) }
+        .gesture(
+            DragGesture(minimumDistance: 6)
+                .onChanged { drag in
+                    if scrubFraction == nil { scrubStart = bookProgress }
+                    let value = min(max(scrubStart + drag.translation.width / Self.progressWidth, 0), 1)
+                    withAnimation(.snappy(duration: 0.2)) { scrubFraction = value }
+                }
+                .onEnded { _ in
+                    if let target = scrubFraction { moveTo(bookFraction: target) }
+                    withAnimation(.snappy(duration: 0.25)) { scrubFraction = nil }
+                }
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("目录")
+        .accessibilityValue("全书 \(Int(bookProgress * 100))%")
+        .accessibilityHint("左右滑动可跳转进度")
+        .accessibilityAdjustableAction { direction in
+            let step = direction == .increment ? 0.05 : -0.05
+            moveTo(bookFraction: min(max(bookProgress + step, 0), 0.999))
+        }
+        .accessibilityIdentifier("open-chapters")
+    }
+
+    private static func chapterFeedback(from old: Int?, to new: Int?) -> SensoryFeedback? {
+        guard new != nil else { return nil }
+        return old == nil ? .impact(weight: .light) : .selection
+    }
+
+    private static func endFeedback(from _: Bool, to atEnd: Bool) -> SensoryFeedback? {
+        atEnd ? .impact(flexibility: .rigid) : nil
+    }
+
+    /// The chapter under the finger while skimming.
+    private var scrubChapter: Int? { scrubFraction.map { place(atBookFraction: $0).chapter } }
+    private var scrubAtEnd: Bool { scrubFraction == 0 || scrubFraction == 1 }
+
+    /// The bubble over the finger while skimming: which chapter, and how far through the book.
+    private func scrubBubble(at value: Double, width: CGFloat) -> some View {
+        let bubbleWidth: CGFloat = 220
+        let target = place(atBookFraction: value)
+        let title = content?.chapters.indices.contains(target.chapter) == true ? content!.chapters[target.chapter].title : ""
+        return VStack(spacing: 2) {
+            Text(title).font(.subheadline.weight(.medium)).lineLimit(1)
+            Text("第 \(target.chapter + 1)/\(chapterCount) 章 · \(Int(value * 100))%")
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .frame(width: bubbleWidth)
+        .glassEffect(.regular, in: .rect(cornerRadius: 18))
+        // Sits on the bar's top edge, centred over the finger but kept on screen at either end.
+        .frame(height: 0, alignment: .bottom)
+        .offset(x: min(max(width * CGFloat(value) - bubbleWidth / 2, -80), width - bubbleWidth), y: -10)
+        .allowsHitTesting(false)
+    }
+
+    /// Opens the book at a fraction of the way through it, as the progress row was dragged to.
+    private func moveTo(bookFraction value: Double) {
+        let target = place(atBookFraction: value)
+        guard chapterLengths.indices.contains(target.chapter) else { return }
+        let length = chapterLengths[target.chapter]
+        let position = min(Int(target.fraction * Double(length)), max(length - 1, 0))
+        lookup = nil
+        if target.chapter == chapter {
+            jump = JumpRequest(offset: position, highlight: false)
+        } else {
+            chapter = target.chapter
+            offset = position
+            fraction = target.fraction
+            jump = nil
+        }
+        if savedPlace == nil { store.savePosition(bookID: bookID, chapter: chapter, offset: position, fraction: target.fraction) }
     }
 
     private var autoReadingBar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 8) {
             Label("自动阅读", systemImage: "play.circle").font(.subheadline.weight(.medium))
-            Spacer()
-            Button { autoSpeed = max(1, autoSpeed - 1) } label: { Image(systemName: "minus").frame(width: 36, height: 32) }
+                .lineLimit(1).fixedSize()
+            Spacer(minLength: 4)
+            Button { autoSpeed = max(1, autoSpeed - 1) } label: { Image(systemName: "minus").frame(width: 32, height: 32) }
                 .disabled(autoSpeed <= 1).accessibilityLabel("减速")
-            Text("速度 \(autoSpeed)").monospacedDigit().font(.subheadline)
-            Button { autoSpeed = min(10, autoSpeed + 1) } label: { Image(systemName: "plus").frame(width: 36, height: 32) }
+            Text("速度 \(autoSpeed)").monospacedDigit().font(.subheadline).lineLimit(1).fixedSize()
+            Button { autoSpeed = min(10, autoSpeed + 1) } label: { Image(systemName: "plus").frame(width: 32, height: 32) }
                 .disabled(autoSpeed >= 10).accessibilityLabel("加速")
-            Button("退出") { autoReading = false }
+            Button { autoReading = false } label: { Text("退出").lineLimit(1).fixedSize() }
                 .buttonStyle(.bordered).controlSize(.small)
                 .accessibilityIdentifier("stop-auto-read")
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .glassEffect(.regular, in: .capsule)
     }
 
     private var nextChapterButton: some View {
         Button { go(to: chapter + 1) } label: {
             Label("下一章", systemImage: "arrow.down.circle").font(.subheadline.weight(.semibold))
         }
-        .buttonStyle(.borderedProminent).controlSize(.small)
+        .buttonStyle(.glassProminent).controlSize(.small)
         .accessibilityIdentifier("next-chapter")
     }
 
@@ -400,8 +532,9 @@ struct ReaderView: View {
             }
         }
         .font(.subheadline)
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(Color.card)
+        .padding(.horizontal, 20).padding(.vertical, 14)
+        .glassEffect(.regular, in: .capsule)
+        .padding(.horizontal, 16)
     }
 
     private var tip: some View {
@@ -411,9 +544,8 @@ struct ReaderView: View {
             Button { tipSeen = true } label: { Image(systemName: "xmark").font(.footnote.weight(.semibold)) }
                 .accessibilityLabel("关闭提示")
         }
-        .padding(12)
-        .background(Color.card, in: RoundedRectangle(cornerRadius: 14))
-        .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
+        .padding(14)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
         .padding(.horizontal, 16)
     }
 
@@ -432,6 +564,7 @@ struct ReaderView: View {
                     .id(index)
                 }
                 .onAppear { proxy.scrollTo(chapter, anchor: .center) }
+                .onChange(of: chapter) { _, index in withAnimation { proxy.scrollTo(index, anchor: .center) } }
             }
             .navigationTitle("目录").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { sheet = nil } } }
@@ -456,6 +589,7 @@ struct ReaderView: View {
                 chapter = min(max(book.position.chapter, 0), last)
                 offset = book.position.offset
             }
+            chapterLengths = loaded.chapters.map { $0.text.utf16.count }
             content = loaded
         } catch {
             loadError = "书籍文件丢失或已损坏。可以从书架移除后重新导入。"
@@ -518,7 +652,7 @@ struct ReaderView: View {
         lookup = nil
         autoReading = true
         withAnimation(.easeInOut(duration: 0.2)) {
-            showPanel = false
+            menuOpen = false
             chromeVisible = false
         }
     }
@@ -540,11 +674,10 @@ struct ReaderView: View {
     private func tappedBlank() {
         if lookup != nil {
             lookup = nil
+        } else if menuOpen {
+            setMenu(open: false)
         } else {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                chromeVisible.toggle()
-                showPanel = false
-            }
+            withAnimation(.easeInOut(duration: 0.2)) { chromeVisible.toggle() }
         }
     }
 
@@ -553,7 +686,7 @@ struct ReaderView: View {
         guard chromeVisible else { return }
         withAnimation(.easeInOut(duration: 0.2)) {
             chromeVisible = false
-            showPanel = false
+            menuOpen = false
         }
     }
 

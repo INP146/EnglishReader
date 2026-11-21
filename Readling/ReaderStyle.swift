@@ -68,7 +68,8 @@ enum PageTurn: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: LocalizedStringKey {
+    /// A resource rather than a key, so UIKit controls can take it as a plain string too.
+    var title: LocalizedStringResource {
         switch self {
         case .curl: "仿真"
         case .cover: "覆盖"

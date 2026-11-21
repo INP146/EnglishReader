@@ -24,6 +24,9 @@
     _app.launchArguments = @[@"-freshLibrary", @"-readerPageTurn", turn, @"-readerFont", @"30", @"-readerTipSeen", @"YES"];
     [_app launch];
     [[_app.buttons matchingPredicate:[NSPredicate predicateWithFormat:@"identifier BEGINSWITH 'book-'"]].firstMatch tap];
+    XCUIElement *menu = _app.buttons[@"reader-menu"];
+    XCTAssertTrue([menu waitForExistenceWithTimeout:3]);
+    [menu tap];
     XCUIElement *chapters = _app.buttons[@"open-chapters"];
     XCTAssertTrue([chapters waitForExistenceWithTimeout:3]);
     [chapters tap];
@@ -56,6 +59,9 @@
                              @"-translationEngine", @"stub", @"-translationAutomatic", @"YES"];
     [_app launch];
     [[_app.buttons matchingPredicate:[NSPredicate predicateWithFormat:@"identifier BEGINSWITH 'book-'"]].firstMatch tap];
+    XCUIElement *menu = _app.buttons[@"reader-menu"];
+    XCTAssertTrue([menu waitForExistenceWithTimeout:3]);
+    [menu tap];
     XCUIElement *chapters = _app.buttons[@"open-chapters"];
     XCTAssertTrue([chapters waitForExistenceWithTimeout:3]);
     [chapters tap];
@@ -64,7 +70,7 @@
     [first tap];
     [[self at:0.5 y:0.5] tap]; // Puts the toolbars away.
     [NSThread sleepForTimeInterval:1];
-    XCTAssertFalse(_app.buttons[@"open-chapters"].hittable, @"the toolbars are still up");
+    XCTAssertFalse(_app.buttons[@"reader-menu"].hittable, @"the toolbars are still up");
     // Holding on after the long press extends the selection word by word.
     [[self at:0.15 y:0.35] pressForDuration:1.0 thenDragToCoordinate:[self at:0.85 y:0.45]];
     XCUIElement *translation = [_app descendantsMatchingType:XCUIElementTypeAny][@"translation"];

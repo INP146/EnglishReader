@@ -74,6 +74,7 @@ static BOOL Follows(ShownPage next, ShownPage page) {
     _size = _app.windows.firstMatch.frame.size;
     // A new library holds just the sample book.
     [self tap:[_app.buttons matchingPredicate:[NSPredicate predicateWithFormat:@"identifier BEGINSWITH 'book-'"]].firstMatch];
+    [self tap:_app.buttons[@"reader-menu"]];
     [self tap:_app.buttons[@"open-chapters"]];
     [self tap:[_app.collectionViews.cells elementBoundByIndex:1]];
     [[_app.windows.firstMatch coordinateWithNormalizedOffset:CGVectorMake(0.5, 0.5)] tap]; // Puts the toolbars away.
